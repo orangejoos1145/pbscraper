@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 BASE = "https://www.pbtech.co.nz"
 PER_PAGE = 100
 MAX_PAGES = 300
-REQUEST_DELAY = 0.5  # Increased slightly for stability
+REQUEST_DELAY = 1.0  # Increased delay to be gentler on the server
 
 # --- CONFIGURATION ---
 SITE_CONFIGS = {
@@ -152,26 +152,55 @@ def extract_product_from_card(card):
 async def scrape_page(page, page_num, base_url):
     url = make_page_url(base_url, page_num)
     print(f"[Page {page_num}] Loading: {url}")
-    try:
-        # Changed to domcontentloaded and increased timeout to 60s
-        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        
-        # Wait for products to exist
-        await page.wait_for_selector("div.js-product-card", timeout=15000)
-        
-        html = await page.content()
-        soup = BeautifulSoup(html, "lxml")
-        cards = soup.select("div.js-product-card")
-        results = [extract_product_from_card(c) for c in cards]
-        print(f"[Page {page_num}] Found {len(results)} products")
-        await asyncio.sleep(REQUEST_DELAY)
-        return results
-    except PlaywrightTimeout:
-        print(f"[Page {page_num}] Timeout or no products found")
-        return []
-    except Exception as e:
-        print(f"[Page {page_num}] Error: {e}")
-        return []
+    
+    # RETRY LOGIC: Try 3 times to load the page properly
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 1. Navigate to page (Wait 60s for initial load)
+            await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            
+            # 2. Check for "No products found" banner immediately
+            content = await page.content()
+            if "No products were found that match your selection criteria" in content:
+                print(f"[Page {page_num}] >> STOP CONDITION MET: 'No products were found' banner detected.")
+                return None  # Return None to signal "End of List"
+
+            # 3. If banner not found, we MUST find products. Wait up to 30s.
+            try:
+                await page.wait_for_selector("div.js-product-card", timeout=30000)
+            except PlaywrightTimeout:
+                # Double check the banner again in case it loaded late
+                content = await page.content()
+                if "No products were found that match your selection criteria" in content:
+                     print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected after wait.")
+                     return None # End of list
+                
+                # If neither products nor banner found, the page is broken/slow. RETRY.
+                print(f"[Page {page_num}] Attempt {attempt+1}/{max_retries}: Loaded but no products/banner found. Retrying...")
+                await asyncio.sleep(2)
+                continue 
+
+            # 4. Extract products
+            html = await page.content()
+            soup = BeautifulSoup(html, "lxml")
+            cards = soup.select("div.js-product-card")
+            results = [extract_product_from_card(c) for c in cards]
+            
+            if not results:
+                print(f"[Page {page_num}] Attempt {attempt+1}/{max_retries}: Selector matched but 0 results extracted. Retrying...")
+                continue
+
+            print(f"[Page {page_num}] Found {len(results)} products")
+            await asyncio.sleep(REQUEST_DELAY)
+            return results
+
+        except Exception as e:
+            print(f"[Page {page_num}] Attempt {attempt+1}/{max_retries} Error: {e}")
+            await asyncio.sleep(5)
+            
+    print(f"[Page {page_num}] FAILED after {max_retries} attempts. Skipping page.")
+    return [] # Return empty list (not None), so loop continues to next page if possible
 
 async def run_scraper_for_site(config):
     site_name = config['name']
@@ -181,16 +210,16 @@ async def run_scraper_for_site(config):
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Block images/fonts/css to speed up loading
+        # Block heavy media to speed up loading
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        # Optional: Block resources to save bandwidth and time
-        # await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2}", lambda route: route.abort())
+        # Abort images/fonts to save bandwidth
+        await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}", lambda route: route.abort())
 
         page = await context.new_page()
 
-        # Retry logic for initial connection
+        # Initial connection (retry 3 times)
         connected = False
         for attempt in range(3):
             try:
@@ -207,7 +236,7 @@ async def run_scraper_for_site(config):
             await browser.close()
             return []
 
-        # Try to change view settings (optional)
+        # Setup view settings
         try:
             await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
             await asyncio.sleep(2)
@@ -220,10 +249,18 @@ async def run_scraper_for_site(config):
                 await page.wait_for_selector("div.js-product-card.col-xl-12", timeout=10000)
         except: pass
 
+        # PAGE LOOP
         for page_num in range(1, MAX_PAGES + 1):
             page_results = await scrape_page(page, page_num, base_url)
-            if not page_results: break
-            all_results.extend(page_results)
+            
+            # If function returns None, it means we hit the "No products found" banner -> STOP
+            if page_results is None: 
+                print(f"Finished scraping {site_name}.")
+                break
+            
+            # If function returns [], it means page failed (timeout/error) but NOT end of list -> Continue
+            if page_results:
+                all_results.extend(page_results)
         
         await browser.close()
     return all_results
