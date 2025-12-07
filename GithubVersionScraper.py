@@ -10,9 +10,9 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 BASE = "https://www.pbtech.co.nz"
 PER_PAGE = 100
 MAX_PAGES = 300
-REQUEST_DELAY = 0.1
+REQUEST_DELAY = 0.5  # Increased slightly for stability
 
-# --- CONFIGURATION (UPDATED URLs) ---
+# --- CONFIGURATION ---
 SITE_CONFIGS = {
     "1": { 
         "name": "HOT DEALS", 
@@ -153,8 +153,12 @@ async def scrape_page(page, page_num, base_url):
     url = make_page_url(base_url, page_num)
     print(f"[Page {page_num}] Loading: {url}")
     try:
-        await page.goto(url, timeout=30000, wait_until="networkidle")
+        # Changed to domcontentloaded and increased timeout to 60s
+        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        
+        # Wait for products to exist
         await page.wait_for_selector("div.js-product-card", timeout=15000)
+        
         html = await page.content()
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select("div.js-product-card")
@@ -165,6 +169,9 @@ async def scrape_page(page, page_num, base_url):
     except PlaywrightTimeout:
         print(f"[Page {page_num}] Timeout or no products found")
         return []
+    except Exception as e:
+        print(f"[Page {page_num}] Error: {e}")
+        return []
 
 async def run_scraper_for_site(config):
     site_name = config['name']
@@ -174,12 +181,35 @@ async def run_scraper_for_site(config):
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        # Block images/fonts/css to speed up loading
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        # Optional: Block resources to save bandwidth and time
+        # await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2}", lambda route: route.abort())
+
         page = await context.new_page()
 
-        await page.goto(make_page_url(base_url, 1), timeout=30000, wait_until="networkidle")
+        # Retry logic for initial connection
+        connected = False
+        for attempt in range(3):
+            try:
+                print(f"Initial connection attempt {attempt+1}...")
+                await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
+                connected = True
+                break
+            except Exception as e:
+                print(f"Connection failed ({e}), retrying...")
+                await asyncio.sleep(5)
+        
+        if not connected:
+            print(f"Could not connect to {site_name} after 3 attempts. Skipping.")
+            await browser.close()
+            return []
+
+        # Try to change view settings (optional)
         try:
-            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE))
+            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
             await asyncio.sleep(2)
         except: pass
 
@@ -194,6 +224,7 @@ async def run_scraper_for_site(config):
             page_results = await scrape_page(page, page_num, base_url)
             if not page_results: break
             all_results.extend(page_results)
+        
         await browser.close()
     return all_results
 
