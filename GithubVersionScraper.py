@@ -14,8 +14,8 @@ REQUEST_DELAY = 0.1
 
 # --- CONFIGURATION (UPDATED URLs) ---
 SITE_CONFIGS = {
-    "1": { "name": "HOT DEALS", "base_url": "https://www.pbtech.co.nz/promotions/hot-deals" },
-    "2": { "name": "CLEARANCE ZONE", "base_url": "https://www.pbtech.co.nz/promotions/clearance" },
+    "1": { "name": "HOT DEALS", "base_url": "https://www.pbtech.co.nz/hot-deals" },
+    "2": { "name": "CLEARANCE ZONE", "base_url": "https://www.pbtech.co.nz/clearance" },
 }
 
 money_re = re.compile(r"\$\s*([0-9,]+(?:\.[0-9]{1,2})?)")
@@ -217,3 +217,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
