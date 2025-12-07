@@ -2,8 +2,9 @@ import pandas as pd
 import html
 import re
 import json
+import sys
 from datetime import datetime
-import pytz # <--- Added
+import pytz 
 
 IN_CSV = "pbtech_deals.csv"
 OUT_HTML = "index.html"
@@ -80,12 +81,18 @@ def get_str_or_empty(x):
     if pd.isna(x): return ""
     return str(x).strip()
 
+# --- LOAD CSV (With Safety Check) ---
 try:
     df = pd.read_csv(IN_CSV)
 except FileNotFoundError:
-    print(f"Error: Input file '{IN_CSV}' not found.")
-    df = pd.DataFrame(columns=["Product name", "Link", "Original Price", "Discount Price", "% Discount", "Part Number", "PromoCode"])
+    print(f"Error: Input file '{IN_CSV}' not found. Stopping generator.")
+    sys.exit(0)
 
+if df.empty:
+    print(f"Warning: Input file '{IN_CSV}' is empty. Stopping generator.")
+    sys.exit(0)
+
+# --- PROCESS DATA ---
 df["orig_inc"] = df.get("Original Price", pd.Series(dtype=str)).apply(to_numeric_price)
 df["orig_ex"] = df["orig_inc"] / GST_RATE
 df["disc_inc"] = df.get("Discount Price", pd.Series(dtype=str)).apply(to_numeric_price)
