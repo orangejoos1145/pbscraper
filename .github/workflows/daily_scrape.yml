@@ -8,10 +8,8 @@ on:
 jobs:
   build:
     runs-on: self-hosted
-    # --- ADD THIS SECTION ---
     env:
       PYTHONUNBUFFERED: "1"
-    # ------------------------
     permissions:
       contents: write
 
@@ -19,30 +17,40 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Check Python Version
         run: |
           py --version
 
       - name: Install dependencies
         run: |
-          python -m pip install -r requirements.txt
+          # Uses 'py' launcher to invoke pip
+          py -m pip install -r requirements.txt
 
       - name: Install Playwright Browsers
         run: |
-          playwright install chromium
+          py -m playwright install chromium
 
       - name: Run Scraper
         run: |
-          python GithubVersionScraper.py
+          py GithubVersionScraper.py
+
+      - name: Run Dupe Deleter
+        run: |
+          py dupedeleter.py
 
       - name: Run Generator
         run: |
-          python GithubVersionSiteGen.py
+          py GithubVersionSiteGen.py
 
       - name: Commit and Push
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git add index.html pbtech_deals.csv
-          git commit -m "Auto-update: $(date)" || echo "No changes to commit"
+          
+          # Add all modified files (CSV, HTML, etc)
+          git add .
+          
+          # Commit with Windows-compatible date command
+          git commit -m "Auto-update: $(Get-Date -Format 'yyyy-MM-dd HH:mm')" || Write-Host "No changes to commit"
+          
           git push
