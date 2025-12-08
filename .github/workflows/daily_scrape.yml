@@ -21,7 +21,7 @@ jobs:
 
       - name: Set up Python
         run: |
-          python --version
+          py --version
 
       - name: Install dependencies
         run: |
