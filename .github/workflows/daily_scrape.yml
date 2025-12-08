@@ -2,13 +2,16 @@ name: Daily PB Scrape
 
 on:
   schedule:
-    # 06:00 UTC is roughly 7:00 PM NZT
     - cron: "0 6 * * *"
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # --- ADD THIS SECTION ---
+    env:
+      PYTHONUNBUFFERED: "1"
+    # ------------------------
     permissions:
       contents: write
 
@@ -31,7 +34,7 @@ jobs:
 
       - name: Run Scraper
         run: |
-          python GithubVersionScraper.py
+          python GithubVersionSiteScraper.py
 
       - name: Run Generator
         run: |
