@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 BASE = "https://www.pbtech.co.nz"
 PER_PAGE = 100
 MAX_PAGES = 300
-REQUEST_DELAY = 1.0  # Increased delay to be gentler on the server
+REQUEST_DELAY = 1.0
 
 # --- CONFIGURATION ---
 SITE_CONFIGS = {
@@ -54,6 +54,7 @@ def parse_price_from_ginc(price_el):
     return parse_money(price_el.get_text(" "))
 
 def extract_product_from_card(card):
+    # (Same extraction logic as before)
     call_out_el = card.select_one("div.call_out")
     call_out_text = safe_text(call_out_el).upper() if call_out_el else None
     
@@ -77,25 +78,21 @@ def extract_product_from_card(card):
 
     promo_code = None
     if call_out_text: promo_code = call_out_text
-    
     if promo_code is None:
         promo_text_el = card.select_one(".card-additional-info .ginc")
         if promo_text_el:
             promo_text = safe_text(promo_text_el)
             match = re.search(r"Use promo code ([\w\d]+)", promo_text, re.IGNORECASE)
             if match: promo_code = match.group(1).upper()
-
     if promo_code is None:
         bf_image_el = card.select_one("img.promotion-icon[data-src*='imgad/promotion/icon/20251105145510_Icon-64x64.png']")
         if bf_image_el: promo_code = "BF SALE"
-            
     is_clearance_icon_present = bool(card.select_one("img.promotion-icon[data-src*='20250219170256_Icon.png']"))
 
     original_price = None
     discount_price = None
     is_special_price = False
     is_non_promo_clearance = False
-
     price_label_el = card.select_one(".item-price-label .ginc")
     price_label_text = safe_text(price_label_el)
 
@@ -109,13 +106,11 @@ def extract_product_from_card(card):
     else:
         normally_price_el = card.select_one("span.rrp_price")
         if normally_price_el: original_price = parse_money(safe_text(normally_price_el))
-
         if "With promo code" in price_label_text:
             discount_price = parse_money(price_label_text)
             if original_price is None:
                 main_price_el = card.select_one(".item-price-amount .ginc")
                 original_price = parse_price_from_ginc(main_price_el)
-        
         if discount_price is None:
             main_price_el = card.select_one(".item-price-amount .ginc")
             discount_price = parse_price_from_ginc(main_price_el)
@@ -151,114 +146,113 @@ def extract_product_from_card(card):
 
 async def scrape_page(page, page_num, base_url):
     url = make_page_url(base_url, page_num)
-    print(f"[Page {page_num}] Loading: {url}")
+    # FLUSH=TRUE ensures logs appear immediately in GitHub Actions
+    print(f"[Page {page_num}] Loading: {url}", flush=True)
     
-    # RETRY LOGIC: Try 3 times to load the page properly
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 1. Navigate to page (Wait 60s for initial load)
+            print(f"[Page {page_num}] .. Navigating (Attempt {attempt+1})", flush=True)
             await page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
-            # 2. Check for "No products found" banner immediately
+            # Check Banner
+            print(f"[Page {page_num}] .. Checking for 'No products' banner", flush=True)
             content = await page.content()
             if "No products were found that match your selection criteria" in content:
-                print(f"[Page {page_num}] >> STOP CONDITION MET: 'No products were found' banner detected.")
-                return None  # Return None to signal "End of List"
+                print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected.", flush=True)
+                return None 
 
-            # 3. If banner not found, we MUST find products. Wait up to 30s.
+            # Check Products
+            print(f"[Page {page_num}] .. Waiting for product cards...", flush=True)
             try:
-                await page.wait_for_selector("div.js-product-card", timeout=30000)
+                await page.wait_for_selector("div.js-product-card", timeout=20000)
             except PlaywrightTimeout:
-                # Double check the banner again in case it loaded late
+                # Re-check banner in case of slow load
                 content = await page.content()
                 if "No products were found that match your selection criteria" in content:
-                     print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected after wait.")
-                     return None # End of list
+                     print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected after wait.", flush=True)
+                     return None
                 
-                # If neither products nor banner found, the page is broken/slow. RETRY.
-                print(f"[Page {page_num}] Attempt {attempt+1}/{max_retries}: Loaded but no products/banner found. Retrying...")
+                print(f"[Page {page_num}] !! Timeout waiting for cards. Retrying...", flush=True)
                 await asyncio.sleep(2)
                 continue 
 
-            # 4. Extract products
+            # Extract
             html = await page.content()
             soup = BeautifulSoup(html, "lxml")
             cards = soup.select("div.js-product-card")
             results = [extract_product_from_card(c) for c in cards]
             
             if not results:
-                print(f"[Page {page_num}] Attempt {attempt+1}/{max_retries}: Selector matched but 0 results extracted. Retrying...")
+                print(f"[Page {page_num}] !! Loaded but found 0 products. Retrying...", flush=True)
                 continue
 
-            print(f"[Page {page_num}] Found {len(results)} products")
+            print(f"[Page {page_num}] Success: Found {len(results)} products", flush=True)
             await asyncio.sleep(REQUEST_DELAY)
             return results
 
         except Exception as e:
-            print(f"[Page {page_num}] Attempt {attempt+1}/{max_retries} Error: {e}")
+            print(f"[Page {page_num}] !! Error on Attempt {attempt+1}: {e}", flush=True)
             await asyncio.sleep(5)
             
-    print(f"[Page {page_num}] FAILED after {max_retries} attempts. Skipping page.")
-    return [] # Return empty list (not None), so loop continues to next page if possible
+    print(f"[Page {page_num}] FAILED after {max_retries} attempts. Skipping.", flush=True)
+    return [] 
 
 async def run_scraper_for_site(config):
     site_name = config['name']
     base_url = config['base_url']
-    print(f"STARTING SCRAPE FOR: {site_name}")
+    print(f"STARTING SCRAPE FOR: {site_name}", flush=True)
     all_results = []
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Block heavy media to speed up loading
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        # Abort images/fonts to save bandwidth
         await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}", lambda route: route.abort())
 
         page = await context.new_page()
 
-        # Initial connection (retry 3 times)
+        # Initial connection check
         connected = False
         for attempt in range(3):
             try:
-                print(f"Initial connection attempt {attempt+1}...")
+                print(f"Initial connection attempt {attempt+1}...", flush=True)
                 await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
                 connected = True
                 break
             except Exception as e:
-                print(f"Connection failed ({e}), retrying...")
+                print(f"Connection failed ({e}), retrying...", flush=True)
                 await asyncio.sleep(5)
         
         if not connected:
-            print(f"Could not connect to {site_name} after 3 attempts. Skipping.")
+            print(f"Could not connect to {site_name}. Skipping.", flush=True)
             await browser.close()
             return []
 
-        # Setup view settings
+        # Change View
         try:
-            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
+            print("Setting View to 100 items...", flush=True)
+            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=10000)
             await asyncio.sleep(2)
-        except: pass
+        except Exception as e: print(f"View change warning: {e}", flush=True)
 
         try:
+            print("Switching to Expanded List...", flush=True)
             view_button = page.locator('div.js-change-view[title="View as expanded list"]')
             if "active" not in (await view_button.get_attribute("class") or ""):
-                await view_button.click(timeout=5000)
+                await view_button.click(timeout=10000)
                 await page.wait_for_selector("div.js-product-card.col-xl-12", timeout=10000)
-        except: pass
+        except Exception as e: print(f"List switch warning: {e}", flush=True)
 
-        # PAGE LOOP
+        # Main Loop
         for page_num in range(1, MAX_PAGES + 1):
             page_results = await scrape_page(page, page_num, base_url)
             
-            # If function returns None, it means we hit the "No products found" banner -> STOP
             if page_results is None: 
-                print(f"Finished scraping {site_name}.")
+                print(f"Finished scraping {site_name}.", flush=True)
                 break
             
-            # If function returns [], it means page failed (timeout/error) but NOT end of list -> Continue
             if page_results:
                 all_results.extend(page_results)
         
@@ -266,9 +260,8 @@ async def run_scraper_for_site(config):
     return all_results
 
 async def main():
-    # AUTOMATED SELECTION: Scrape sites 1 and 2 by default
     valid_keys = ["1", "2"] 
-    print(f"Automated mode. Scraping sites: {valid_keys}")
+    print(f"Automated mode. Scraping sites: {valid_keys}", flush=True)
     
     master_results_list = []
     for key in valid_keys:
@@ -283,9 +276,9 @@ async def main():
         df = pd.DataFrame(master_results_list)
         df = df.reindex(columns=cols)
         df.to_csv(output_filename, index=False, encoding="utf-8")
-        print(f"\nSaved {len(df)} items to {output_filename}")
+        print(f"\nSaved {len(df)} items to {output_filename}", flush=True)
     else:
-        print("\nNo products scraped. Creating empty CSV file.")
+        print("\nNo products scraped. Creating empty CSV file.", flush=True)
         df = pd.DataFrame(columns=cols)
         df.to_csv(output_filename, index=False, encoding="utf-8")
 
