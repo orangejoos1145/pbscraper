@@ -2,6 +2,7 @@
 import asyncio
 import re
 import os
+import random  # <--- Added for random delays
 from urllib.parse import urljoin
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -10,7 +11,6 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 BASE = "https://www.pbtech.co.nz"
 PER_PAGE = 100
 MAX_PAGES = 300
-REQUEST_DELAY = 1.0
 
 # --- CONFIGURATION ---
 SITE_CONFIGS = {
@@ -54,7 +54,7 @@ def parse_price_from_ginc(price_el):
     return parse_money(price_el.get_text(" "))
 
 def extract_product_from_card(card):
-    # (Same extraction logic as before)
+    # (Same logic as before, kept compact)
     call_out_el = card.select_one("div.call_out")
     call_out_text = safe_text(call_out_el).upper() if call_out_el else None
     
@@ -146,49 +146,69 @@ def extract_product_from_card(card):
 
 async def scrape_page(page, page_num, base_url):
     url = make_page_url(base_url, page_num)
-    # FLUSH=TRUE ensures logs appear immediately in GitHub Actions
     print(f"[Page {page_num}] Loading: {url}", flush=True)
     
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            print(f"[Page {page_num}] .. Navigating (Attempt {attempt+1})", flush=True)
-            await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            if attempt > 0:
+                print(f"[Page {page_num}] .. Refreshing (Reloading page)...", flush=True)
+                await page.reload(timeout=60000, wait_until="domcontentloaded")
+            else:
+                print(f"[Page {page_num}] .. Navigating (Attempt {attempt+1})", flush=True)
+                await page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
-            # Check Banner
-            print(f"[Page {page_num}] .. Checking for 'No products' banner", flush=True)
+            # --- DEBUGGING: What are we actually looking at? ---
+            try:
+                page_title = await page.title()
+                # Get the first 100 chars of body text to see if it says "Access Denied" or "Cloudflare"
+                body_text = await page.evaluate("document.body.innerText.substring(0, 150).replace(/\\n/g, ' ')")
+            except:
+                page_title = "Unknown"
+                body_text = "Could not extract text"
+            
+            # --- Check Banner ---
             content = await page.content()
             if "No products were found that match your selection criteria" in content:
                 print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected.", flush=True)
                 return None 
 
-            # Check Products
-            print(f"[Page {page_num}] .. Waiting for product cards...", flush=True)
+            # --- Check Products ---
+            print(f"[Page {page_num}] .. Waiting for products...", flush=True)
             try:
-                await page.wait_for_selector("div.js-product-card", timeout=20000)
+                await page.wait_for_selector("div.js-product-card", timeout=15000)
             except PlaywrightTimeout:
-                # Re-check banner in case of slow load
+                # If timeout, print diagnostics!
+                print(f"\n[Page {page_num}] !! TIMEOUT DIAGNOSTICS:", flush=True)
+                print(f"  > Page Title: '{page_title}'", flush=True)
+                print(f"  > Visible Text: '{body_text}'", flush=True)
+                
+                # Check for banner one last time
                 content = await page.content()
                 if "No products were found that match your selection criteria" in content:
                      print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected after wait.", flush=True)
                      return None
                 
-                print(f"[Page {page_num}] !! Timeout waiting for cards. Retrying...", flush=True)
-                await asyncio.sleep(2)
+                print(f"[Page {page_num}] !! Retrying due to timeout...", flush=True)
+                await asyncio.sleep(5) # Wait longer before retry
                 continue 
 
-            # Extract
+            # --- Extract ---
             html = await page.content()
             soup = BeautifulSoup(html, "lxml")
             cards = soup.select("div.js-product-card")
             results = [extract_product_from_card(c) for c in cards]
             
             if not results:
-                print(f"[Page {page_num}] !! Loaded but found 0 products. Retrying...", flush=True)
+                print(f"[Page {page_num}] !! Loaded but 0 products found. Text: {body_text}", flush=True)
                 continue
 
             print(f"[Page {page_num}] Success: Found {len(results)} products", flush=True)
-            await asyncio.sleep(REQUEST_DELAY)
+            
+            # RANDOM DELAY to act human (3 to 6 seconds)
+            sleep_time = random.uniform(3.0, 6.0)
+            await asyncio.sleep(sleep_time)
+            
             return results
 
         except Exception as e:
@@ -213,7 +233,7 @@ async def run_scraper_for_site(config):
 
         page = await context.new_page()
 
-        # Initial connection check
+        # Initial connection
         connected = False
         for attempt in range(3):
             try:
@@ -230,12 +250,12 @@ async def run_scraper_for_site(config):
             await browser.close()
             return []
 
-        # Change View
+        # Change View Settings
         try:
             print("Setting View to 100 items...", flush=True)
             await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=10000)
             await asyncio.sleep(2)
-        except Exception as e: print(f"View change warning: {e}", flush=True)
+        except: pass
 
         try:
             print("Switching to Expanded List...", flush=True)
@@ -243,7 +263,7 @@ async def run_scraper_for_site(config):
             if "active" not in (await view_button.get_attribute("class") or ""):
                 await view_button.click(timeout=10000)
                 await page.wait_for_selector("div.js-product-card.col-xl-12", timeout=10000)
-        except Exception as e: print(f"List switch warning: {e}", flush=True)
+        except: pass
 
         # Main Loop
         for page_num in range(1, MAX_PAGES + 1):
