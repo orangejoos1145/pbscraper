@@ -2,7 +2,7 @@
 import asyncio
 import re
 import os
-import random  # <--- Added for random delays
+import random
 from urllib.parse import urljoin
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -11,6 +11,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 BASE = "https://www.pbtech.co.nz"
 PER_PAGE = 100
 MAX_PAGES = 300
+PAGES_BEFORE_RESET = 5  # <--- NEW: Restart browser every 5 pages to clear "suspicion"
 
 # --- CONFIGURATION ---
 SITE_CONFIGS = {
@@ -54,7 +55,6 @@ def parse_price_from_ginc(price_el):
     return parse_money(price_el.get_text(" "))
 
 def extract_product_from_card(card):
-    # (Same logic as before, kept compact)
     call_out_el = card.select_one("div.call_out")
     call_out_text = safe_text(call_out_el).upper() if call_out_el else None
     
@@ -144,6 +144,39 @@ def extract_product_from_card(card):
         "Link": link
     }
 
+# --- NEW: Helper to launch a "Stealth" Browser ---
+async def launch_stealth_browser(p):
+    # These args hide the "I am a robot" flags from Chrome
+    browser = await p.chromium.launch(
+        headless=True,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-infobars",
+            "--window-position=0,0",
+            "--ignore-certifcate-errors",
+            "--ignore-certifcate-errors-spki-list",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ]
+    )
+    context = await browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        viewport={"width": 1920, "height": 1080}
+    )
+    
+    # Inject script to remove 'navigator.webdriver' property (Key detection method)
+    await context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+    """)
+    
+    # Block heavy resources
+    await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}", lambda route: route.abort())
+    
+    return browser, context
+
 async def scrape_page(page, page_num, base_url):
     url = make_page_url(base_url, page_num)
     print(f"[Page {page_num}] Loading: {url}", flush=True)
@@ -152,21 +185,20 @@ async def scrape_page(page, page_num, base_url):
     for attempt in range(max_retries):
         try:
             if attempt > 0:
-                print(f"[Page {page_num}] .. Refreshing (Reloading page)...", flush=True)
+                print(f"[Page {page_num}] .. Refreshing...", flush=True)
                 await page.reload(timeout=60000, wait_until="domcontentloaded")
             else:
-                print(f"[Page {page_num}] .. Navigating (Attempt {attempt+1})", flush=True)
                 await page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
-            # --- DEBUGGING: What are we actually looking at? ---
+            # --- Check Title for CAPTCHA ---
             try:
-                page_title = await page.title()
-                # Get the first 100 chars of body text to see if it says "Access Denied" or "Cloudflare"
-                body_text = await page.evaluate("document.body.innerText.substring(0, 150).replace(/\\n/g, ' ')")
-            except:
-                page_title = "Unknown"
-                body_text = "Could not extract text"
-            
+                title = await page.title()
+                if "Just a moment" in title or "Security Challenge" in title or "Access denied" in title:
+                     print(f"[Page {page_num}] !! CLOUDFLARE BLOCK DETECTED (Title: {title}). Waiting 10s...", flush=True)
+                     await asyncio.sleep(10)
+                     raise Exception("Cloudflare Block")
+            except: pass
+
             # --- Check Banner ---
             content = await page.content()
             if "No products were found that match your selection criteria" in content:
@@ -174,23 +206,15 @@ async def scrape_page(page, page_num, base_url):
                 return None 
 
             # --- Check Products ---
-            print(f"[Page {page_num}] .. Waiting for products...", flush=True)
             try:
                 await page.wait_for_selector("div.js-product-card", timeout=15000)
             except PlaywrightTimeout:
-                # If timeout, print diagnostics!
-                print(f"\n[Page {page_num}] !! TIMEOUT DIAGNOSTICS:", flush=True)
-                print(f"  > Page Title: '{page_title}'", flush=True)
-                print(f"  > Visible Text: '{body_text}'", flush=True)
-                
-                # Check for banner one last time
+                # Re-check banner
                 content = await page.content()
-                if "No products were found that match your selection criteria" in content:
+                if "No products were found" in content:
                      print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected after wait.", flush=True)
                      return None
-                
-                print(f"[Page {page_num}] !! Retrying due to timeout...", flush=True)
-                await asyncio.sleep(5) # Wait longer before retry
+                print(f"[Page {page_num}] !! Timeout waiting for cards. Retrying...", flush=True)
                 continue 
 
             # --- Extract ---
@@ -200,15 +224,13 @@ async def scrape_page(page, page_num, base_url):
             results = [extract_product_from_card(c) for c in cards]
             
             if not results:
-                print(f"[Page {page_num}] !! Loaded but 0 products found. Text: {body_text}", flush=True)
+                print(f"[Page {page_num}] !! Loaded but 0 products found.", flush=True)
                 continue
 
             print(f"[Page {page_num}] Success: Found {len(results)} products", flush=True)
             
-            # RANDOM DELAY to act human (3 to 6 seconds)
-            sleep_time = random.uniform(3.0, 6.0)
-            await asyncio.sleep(sleep_time)
-            
+            # Random Human Delay
+            await asyncio.sleep(random.uniform(2.0, 5.0))
             return results
 
         except Exception as e:
@@ -225,48 +247,52 @@ async def run_scraper_for_site(config):
     all_results = []
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}", lambda route: route.abort())
-
+        # Start initial browser
+        browser, context = await launch_stealth_browser(p)
         page = await context.new_page()
 
-        # Initial connection
-        connected = False
-        for attempt in range(3):
-            try:
-                print(f"Initial connection attempt {attempt+1}...", flush=True)
-                await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
-                connected = True
-                break
-            except Exception as e:
-                print(f"Connection failed ({e}), retrying...", flush=True)
-                await asyncio.sleep(5)
-        
-        if not connected:
-            print(f"Could not connect to {site_name}. Skipping.", flush=True)
+        # Connect
+        try:
+            print("Connecting...", flush=True)
+            await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
+        except Exception as e:
+            print(f"Initial connection failed: {e}", flush=True)
             await browser.close()
             return []
 
-        # Change View Settings
+        # View Settings
         try:
-            print("Setting View to 100 items...", flush=True)
-            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=10000)
+            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
             await asyncio.sleep(2)
         except: pass
 
         try:
-            print("Switching to Expanded List...", flush=True)
             view_button = page.locator('div.js-change-view[title="View as expanded list"]')
             if "active" not in (await view_button.get_attribute("class") or ""):
-                await view_button.click(timeout=10000)
-                await page.wait_for_selector("div.js-product-card.col-xl-12", timeout=10000)
+                await view_button.click(timeout=5000)
         except: pass
 
-        # Main Loop
+        # PAGE LOOP WITH SESSION RESET
         for page_num in range(1, MAX_PAGES + 1):
+            
+            # --- SESSION RESET LOGIC ---
+            if page_num > 1 and (page_num - 1) % PAGES_BEFORE_RESET == 0:
+                print(f"\n[System] Reached {PAGES_BEFORE_RESET} pages. RESTARTING BROWSER to clear footprints...\n", flush=True)
+                await browser.close()
+                await asyncio.sleep(10) # Wait 10s to look like a new user
+                browser, context = await launch_stealth_browser(p)
+                page = await context.new_page()
+                
+                # We need to re-apply view settings on the new session
+                try:
+                    await page.goto(make_page_url(base_url, page_num), timeout=60000, wait_until="domcontentloaded")
+                    await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
+                    await asyncio.sleep(1)
+                    view_button = page.locator('div.js-change-view[title="View as expanded list"]')
+                    if "active" not in (await view_button.get_attribute("class") or ""):
+                        await view_button.click(timeout=5000)
+                except: pass
+
             page_results = await scrape_page(page, page_num, base_url)
             
             if page_results is None: 
