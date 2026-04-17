@@ -1,28 +1,23 @@
 #!/usr/bin/env python3
 import asyncio
 import re
-import os
-import random
 from urllib.parse import urljoin
 import pandas as pd
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 BASE = "https://www.pbtech.co.nz"
-PER_PAGE = 100
 MAX_PAGES = 300
-PAGES_BEFORE_RESET = 5  # <--- NEW: Restart browser every 5 pages to clear "suspicion"
+REQUEST_DELAY = 1.0
+
+# URLs for forcing server-side settings
+URL_TOGGLE_GST = "https://www.pbtech.co.nz/code/toggle_gst_pdo.php"
+URL_TOGGLE_REC = "https://www.pbtech.co.nz/code/toggle_records_pdo.php"
 
 # --- CONFIGURATION ---
 SITE_CONFIGS = {
-    "1": { 
-        "name": "HOT DEALS", 
-        "base_url": "https://www.pbtech.co.nz/hot-deals/shop-all" 
-    },
-    "2": { 
-        "name": "CLEARANCE ZONE", 
-        "base_url": "https://www.pbtech.co.nz/clearance/shop-all" 
-    },
+    "1": { "name": "EARLY BLACK FRIDAY DEALS", "base_url": "https://www.pbtech.co.nz/hot-deals/shop-all" },
+    "2": { "name": "CLEARANCE ZONE", "base_url": "https://www.pbtech.co.nz/promotions/clearance" },
 }
 
 money_re = re.compile(r"\$\s*([0-9,]+(?:\.[0-9]{1,2})?)")
@@ -78,21 +73,25 @@ def extract_product_from_card(card):
 
     promo_code = None
     if call_out_text: promo_code = call_out_text
+    
     if promo_code is None:
         promo_text_el = card.select_one(".card-additional-info .ginc")
         if promo_text_el:
             promo_text = safe_text(promo_text_el)
             match = re.search(r"Use promo code ([\w\d]+)", promo_text, re.IGNORECASE)
             if match: promo_code = match.group(1).upper()
+
     if promo_code is None:
         bf_image_el = card.select_one("img.promotion-icon[data-src*='imgad/promotion/icon/20251105145510_Icon-64x64.png']")
         if bf_image_el: promo_code = "BF SALE"
+            
     is_clearance_icon_present = bool(card.select_one("img.promotion-icon[data-src*='20250219170256_Icon.png']"))
 
     original_price = None
     discount_price = None
     is_special_price = False
     is_non_promo_clearance = False
+
     price_label_el = card.select_one(".item-price-label .ginc")
     price_label_text = safe_text(price_label_el)
 
@@ -106,11 +105,13 @@ def extract_product_from_card(card):
     else:
         normally_price_el = card.select_one("span.rrp_price")
         if normally_price_el: original_price = parse_money(safe_text(normally_price_el))
+
         if "With promo code" in price_label_text:
             discount_price = parse_money(price_label_text)
             if original_price is None:
                 main_price_el = card.select_one(".item-price-amount .ginc")
                 original_price = parse_price_from_ginc(main_price_el)
+        
         if discount_price is None:
             main_price_el = card.select_one(".item-price-amount .ginc")
             discount_price = parse_price_from_ginc(main_price_el)
@@ -144,170 +145,68 @@ def extract_product_from_card(card):
         "Link": link
     }
 
-# --- NEW: Helper to launch a "Stealth" Browser ---
-async def launch_stealth_browser(p):
-    # These args hide the "I am a robot" flags from Chrome
-    browser = await p.chromium.launch(
-        headless=True,
-        args=[
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-infobars",
-            "--window-position=0,0",
-            "--ignore-certifcate-errors",
-            "--ignore-certifcate-errors-spki-list",
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ]
-    )
-    context = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        viewport={"width": 1920, "height": 1080}
-    )
-    
-    # Inject script to remove 'navigator.webdriver' property (Key detection method)
-    await context.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined
-        });
-    """)
-    
-    # Block heavy resources
-    await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2}", lambda route: route.abort())
-    
-    return browser, context
-
 async def scrape_page(page, page_num, base_url):
+    # --- FORCE FEED SETTINGS ---
+    try:
+        await page.request.post(URL_TOGGLE_GST, form={'checked': 'true'})
+        await page.request.post(URL_TOGGLE_REC, form={'recnum': '800'})
+    except Exception as e:
+        print(f"Warning: Could not force settings via POST: {e}")
+
     url = make_page_url(base_url, page_num)
-    print(f"[Page {page_num}] Loading: {url}", flush=True)
+    print(f"[Page {page_num}] Loading: {url} (with Forced 900 items & GST Inc)")
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            if attempt > 0:
-                print(f"[Page {page_num}] .. Refreshing...", flush=True)
-                await page.reload(timeout=60000, wait_until="domcontentloaded")
-            else:
-                await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            
-            # --- Check Title for CAPTCHA ---
-            try:
-                title = await page.title()
-                if "Just a moment" in title or "Security Challenge" in title or "Access denied" in title:
-                     print(f"[Page {page_num}] !! CLOUDFLARE BLOCK DETECTED (Title: {title}). Waiting 10s...", flush=True)
-                     await asyncio.sleep(10)
-                     raise Exception("Cloudflare Block")
-            except: pass
-
-            # --- Check Banner ---
-            content = await page.content()
-            if "No products were found that match your selection criteria" in content:
-                print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected.", flush=True)
-                return None 
-
-            # --- Check Products ---
-            try:
-                await page.wait_for_selector("div.js-product-card", timeout=15000)
-            except PlaywrightTimeout:
-                # Re-check banner
-                content = await page.content()
-                if "No products were found" in content:
-                     print(f"[Page {page_num}] >> STOP CONDITION MET: Banner detected after wait.", flush=True)
-                     return None
-                print(f"[Page {page_num}] !! Timeout waiting for cards. Retrying...", flush=True)
-                continue 
-
-            # --- Extract ---
-            html = await page.content()
-            soup = BeautifulSoup(html, "lxml")
-            cards = soup.select("div.js-product-card")
-            results = [extract_product_from_card(c) for c in cards]
-            
-            if not results:
-                print(f"[Page {page_num}] !! Loaded but 0 products found.", flush=True)
-                continue
-
-            print(f"[Page {page_num}] Success: Found {len(results)} products", flush=True)
-            
-            # Random Human Delay
-            await asyncio.sleep(random.uniform(2.0, 5.0))
-            return results
-
-        except Exception as e:
-            print(f"[Page {page_num}] !! Error on Attempt {attempt+1}: {e}", flush=True)
-            await asyncio.sleep(5)
-            
-    print(f"[Page {page_num}] FAILED after {max_retries} attempts. Skipping.", flush=True)
-    return [] 
+    try:
+        # Increased timeouts for 900 item loads
+        await page.goto(url, timeout=60000, wait_until="networkidle")
+        await page.wait_for_selector("div.js-product-card", timeout=20000)
+        html = await page.content()
+        soup = BeautifulSoup(html, "lxml")
+        cards = soup.select("div.js-product-card")
+        results = [extract_product_from_card(c) for c in cards]
+        print(f"[Page {page_num}] Found {len(results)} products")
+        await asyncio.sleep(REQUEST_DELAY)
+        return results
+    except PlaywrightTimeout:
+        print(f"[Page {page_num}] Timeout or no products found (End of list)")
+        return []
 
 async def run_scraper_for_site(config):
     site_name = config['name']
     base_url = config['base_url']
-    print(f"STARTING SCRAPE FOR: {site_name}", flush=True)
+    print(f"STARTING SCRAPE FOR: {site_name}")
     all_results = []
     
     async with async_playwright() as p:
-        # Start initial browser
-        browser, context = await launch_stealth_browser(p)
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = await context.new_page()
 
-        # Connect
+        # Load page 1 briefly just to click the expanded list view
         try:
-            print("Connecting...", flush=True)
             await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
-        except Exception as e:
-            print(f"Initial connection failed: {e}", flush=True)
-            await browser.close()
-            return []
-
-        # View Settings
-        try:
-            await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
-            await asyncio.sleep(2)
-        except: pass
-
-        try:
             view_button = page.locator('div.js-change-view[title="View as expanded list"]')
-            if "active" not in (await view_button.get_attribute("class") or ""):
-                await view_button.click(timeout=5000)
+            if await view_button.count() > 0:
+                if "active" not in (await view_button.get_attribute("class") or ""):
+                    await view_button.click(timeout=5000)
+                    await asyncio.sleep(1)
         except: pass
 
-        # PAGE LOOP WITH SESSION RESET
         for page_num in range(1, MAX_PAGES + 1):
-            
-            # --- SESSION RESET LOGIC ---
-            if page_num > 1 and (page_num - 1) % PAGES_BEFORE_RESET == 0:
-                print(f"\n[System] Reached {PAGES_BEFORE_RESET} pages. RESTARTING BROWSER to clear footprints...\n", flush=True)
-                await browser.close()
-                await asyncio.sleep(10) # Wait 10s to look like a new user
-                browser, context = await launch_stealth_browser(p)
-                page = await context.new_page()
-                
-                # We need to re-apply view settings on the new session
-                try:
-                    await page.goto(make_page_url(base_url, page_num), timeout=60000, wait_until="domcontentloaded")
-                    await page.select_option("select.rec_num.js-rec-num", str(PER_PAGE), timeout=5000)
-                    await asyncio.sleep(1)
-                    view_button = page.locator('div.js-change-view[title="View as expanded list"]')
-                    if "active" not in (await view_button.get_attribute("class") or ""):
-                        await view_button.click(timeout=5000)
-                except: pass
-
             page_results = await scrape_page(page, page_num, base_url)
+            if not page_results: break
+            all_results.extend(page_results)
             
-            if page_results is None: 
-                print(f"Finished scraping {site_name}.", flush=True)
+            # If a page returns less than 500 items while we forced 900, we hit the end
+            if len(page_results) < 500:
                 break
-            
-            if page_results:
-                all_results.extend(page_results)
-        
+                
         await browser.close()
     return all_results
 
 async def main():
     valid_keys = ["1", "2"] 
-    print(f"Automated mode. Scraping sites: {valid_keys}", flush=True)
+    print(f"Automated mode. Scraping sites: {valid_keys}")
     
     master_results_list = []
     for key in valid_keys:
@@ -315,18 +214,15 @@ async def main():
         site_results = await run_scraper_for_site(config)
         if site_results: master_results_list.extend(site_results)
 
-    cols = ["Product name", "Part Number", "Original Price", "Discount Price", "% Discount", "PromoCode", "Link"]
-    output_filename = "pbtech_deals.csv"
-    
     if master_results_list:
         df = pd.DataFrame(master_results_list)
+        cols = ["Product name", "Part Number", "Original Price", "Discount Price", "% Discount", "PromoCode", "Link"]
         df = df.reindex(columns=cols)
+        output_filename = "pbtech_deals.csv"
         df.to_csv(output_filename, index=False, encoding="utf-8")
-        print(f"\nSaved {len(df)} items to {output_filename}", flush=True)
+        print(f"\nSaved {len(df)} items to {output_filename}")
     else:
-        print("\nNo products scraped. Creating empty CSV file.", flush=True)
-        df = pd.DataFrame(columns=cols)
-        df.to_csv(output_filename, index=False, encoding="utf-8")
+        print("\nNo products scraped.")
 
 if __name__ == "__main__":
     asyncio.run(main())
