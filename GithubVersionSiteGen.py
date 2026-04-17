@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import pytz 
 
-IN_CSV = "pbtech_deals.csv"
+IN_CSV = "pbtech_deals_cleaned.csv"
 OUT_HTML = "index.html"
 QUICK_FILTER_CSV = "quickfilters.csv"
 GST_RATE = 1.15
@@ -169,7 +169,6 @@ quick_filters_html = generate_quick_filters_html()
 unique_promos = sorted(df[df["PromoCode"].notna() & (df["PromoCode"] != "")]["PromoCode"].unique())
 promo_filters_html = generate_promo_filters_html(unique_promos)
 
-# ---- TIMEZONE FIX ----
 try:
     nz_tz = pytz.timezone('Pacific/Auckland')
     scrape_time_str = datetime.now(nz_tz).strftime("%d/%m/%Y @ %I:%M %p")
@@ -327,7 +326,7 @@ function updatePaginationUI() {{
 }}
 function applyFilters() {{
     const s = state; const term = s.searchQuery.toLowerCase().trim(); let regex = null; let textTokens = [];
-    if (term.includes('*')) {{ try {{ regex = new RegExp('^' + term.replace(/\\*/g, '.*') + '$', 'i'); }} catch(e){{}} }} else {{ textTokens = term.split(/\\s+/).filter(Boolean); }}
+    if (term.includes('*')) {{ try {{ regex = new RegExp('^' + term.replace(/[*]/g, '.*') + '$', 'i'); }} catch(e){{}} }} else {{ textTokens = term.split(/ +/).filter(Boolean); }}
     const limitMinPrice = s.showGst ? (s.minPrice / GST_RATE) : s.minPrice; const limitMaxPrice = s.showGst ? (s.maxPrice / GST_RATE) : s.maxPrice;
     state.filtered = allDeals.filter(d => {{
         if (d.f[1] && !s.showSpecial) return false; if (d.f[2] && !s.showHidden) return false;
@@ -383,9 +382,3 @@ init();
 </script>
 </body>
 </html>
-"""
-
-with open(OUT_HTML, "w", encoding="utf-8") as f:
-    f.write(html_content)
-
-print(f"Generated {OUT_HTML} successfully.")
