@@ -146,7 +146,6 @@ def extract_product_from_card(card):
     }
 
 async def scrape_page(page, page_num, base_url):
-    # --- FORCE FEED SETTINGS ---
     try:
         await page.request.post(URL_TOGGLE_GST, form={'checked': 'true'})
         await page.request.post(URL_TOGGLE_REC, form={'recnum': '800'})
@@ -154,11 +153,11 @@ async def scrape_page(page, page_num, base_url):
         print(f"Warning: Could not force settings via POST: {e}")
 
     url = make_page_url(base_url, page_num)
-    print(f"[Page {page_num}] Loading: {url} (with Forced 900 items & GST Inc)")
+    print(f"[Page {page_num}] Loading: {url}")
     
     try:
-        # Increased timeouts for 900 item loads
-        await page.goto(url, timeout=60000, wait_until="networkidle")
+        # Changed to domcontentloaded so tracking scripts don't cause a timeout
+        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
         await page.wait_for_selector("div.js-product-card", timeout=20000)
         html = await page.content()
         soup = BeautifulSoup(html, "lxml")
@@ -169,6 +168,9 @@ async def scrape_page(page, page_num, base_url):
         return results
     except PlaywrightTimeout:
         print(f"[Page {page_num}] Timeout or no products found (End of list)")
+        return []
+    except Exception as e:
+        print(f"[Page {page_num}] Error: {e}")
         return []
 
 async def run_scraper_for_site(config):
@@ -182,7 +184,6 @@ async def run_scraper_for_site(config):
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = await context.new_page()
 
-        # Load page 1 briefly just to click the expanded list view
         try:
             await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
             view_button = page.locator('div.js-change-view[title="View as expanded list"]')
@@ -196,8 +197,6 @@ async def run_scraper_for_site(config):
             page_results = await scrape_page(page, page_num, base_url)
             if not page_results: break
             all_results.extend(page_results)
-            
-            # If a page returns less than 500 items while we forced 900, we hit the end
             if len(page_results) < 500:
                 break
                 
@@ -218,7 +217,7 @@ async def main():
         df = pd.DataFrame(master_results_list)
         cols = ["Product name", "Part Number", "Original Price", "Discount Price", "% Discount", "PromoCode", "Link"]
         df = df.reindex(columns=cols)
-        output_filename = "pbtech_deals.csv"
+        output_filename = "pbtech_deals_raw.csv"
         df.to_csv(output_filename, index=False, encoding="utf-8")
         print(f"\nSaved {len(df)} items to {output_filename}")
     else:
