@@ -146,19 +146,12 @@ def extract_product_from_card(card):
     }
 
 async def scrape_page(page, page_num, base_url):
-    try:
-        await page.request.post(URL_TOGGLE_GST, form={'checked': 'true'})
-        await page.request.post(URL_TOGGLE_REC, form={'recnum': '800'})
-    except Exception as e:
-        print(f"Warning: Could not force settings via POST: {e}")
-
     url = make_page_url(base_url, page_num)
     print(f"[Page {page_num}] Loading: {url}")
     
     try:
-        # Changed to domcontentloaded so tracking scripts don't cause a timeout
         await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        await page.wait_for_selector("div.js-product-card", timeout=20000)
+        await page.wait_for_selector("div.js-product-card", timeout=25000)
         html = await page.content()
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select("div.js-product-card")
@@ -180,23 +173,35 @@ async def run_scraper_for_site(config):
     all_results = []
     
     async with async_playwright() as p:
+        # headless=True is required for GitHub Actions runners
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = await context.new_page()
 
+        print("Initializing session cookies...")
         try:
+            # Load page 1 briefly just to get a session cookie
             await page.goto(make_page_url(base_url, 1), timeout=60000, wait_until="domcontentloaded")
+            await asyncio.sleep(2)
+            
+            # NOW force settings via POST after we have a valid session
+            print("Forcing GST Inc and 900 items per page...")
+            await page.request.post(URL_TOGGLE_GST, form={'checked': 'true'})
+            await page.request.post(URL_TOGGLE_REC, form={'recnum': '800'})
+            
             view_button = page.locator('div.js-change-view[title="View as expanded list"]')
             if await view_button.count() > 0:
                 if "active" not in (await view_button.get_attribute("class") or ""):
                     await view_button.click(timeout=5000)
                     await asyncio.sleep(1)
-        except: pass
+        except Exception as e:
+            print(f"Warning: Setup configuration failed: {e}")
 
         for page_num in range(1, MAX_PAGES + 1):
             page_results = await scrape_page(page, page_num, base_url)
             if not page_results: break
             all_results.extend(page_results)
+            
             if len(page_results) < 500:
                 break
                 
