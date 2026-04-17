@@ -2,7 +2,6 @@ import pandas as pd
 import html
 import re
 import json
-import sys
 from datetime import datetime
 import pytz 
 
@@ -81,18 +80,12 @@ def get_str_or_empty(x):
     if pd.isna(x): return ""
     return str(x).strip()
 
-# --- LOAD CSV (With Safety Check) ---
 try:
     df = pd.read_csv(IN_CSV)
 except FileNotFoundError:
-    print(f"Error: Input file '{IN_CSV}' not found. Stopping generator.")
-    sys.exit(0)
+    print(f"Error: Input file '{IN_CSV}' not found.")
+    df = pd.DataFrame(columns=["Product name", "Link", "Original Price", "Discount Price", "% Discount", "Part Number", "PromoCode"])
 
-if df.empty:
-    print(f"Warning: Input file '{IN_CSV}' is empty. Stopping generator.")
-    sys.exit(0)
-
-# --- PROCESS DATA ---
 df["orig_inc"] = df.get("Original Price", pd.Series(dtype=str)).apply(to_numeric_price)
 df["orig_ex"] = df["orig_inc"] / GST_RATE
 df["disc_inc"] = df.get("Discount Price", pd.Series(dtype=str)).apply(to_numeric_price)
@@ -334,7 +327,7 @@ function updatePaginationUI() {{
 }}
 function applyFilters() {{
     const s = state; const term = s.searchQuery.toLowerCase().trim(); let regex = null; let textTokens = [];
-    if (term.includes('*')) {{ try {{ regex = new RegExp('^' + term.replace(/\*/g, '.*') + '$', 'i'); }} catch(e){{}} }} else {{ textTokens = term.split(/\s+/).filter(Boolean); }}
+    if (term.includes('*')) {{ try {{ regex = new RegExp('^' + term.replace(/\\*/g, '.*') + '$', 'i'); }} catch(e){{}} }} else {{ textTokens = term.split(/\\s+/).filter(Boolean); }}
     const limitMinPrice = s.showGst ? (s.minPrice / GST_RATE) : s.minPrice; const limitMaxPrice = s.showGst ? (s.maxPrice / GST_RATE) : s.maxPrice;
     state.filtered = allDeals.filter(d => {{
         if (d.f[1] && !s.showSpecial) return false; if (d.f[2] && !s.showHidden) return false;
@@ -395,4 +388,4 @@ init();
 with open(OUT_HTML, "w", encoding="utf-8") as f:
     f.write(html_content)
 
-print(f"✅ Generated {OUT_HTML} successfully.")
+print(f"Generated {OUT_HTML} successfully.")
