@@ -1,41 +1,5 @@
 """
-PB Tech "Hot Deals" scraper  ->  cat.csv   (standalone, no other files needed)
-
-    python pbscraper.py                      # 500/page, all pages
-    python pbscraper.py --recnum 500
-    python pbscraper.py --out deals.csv --delay 0.5
-
-Requires: requests beautifulsoup4 lxml
-
---------------------------------------------------------------------------
-THE PAGINATION PROBLEM, AND HOW THIS SCRIPT HANDLES IT
---------------------------------------------------------------------------
-Measured behaviour of the site:
-
-    bare URL after POST recnum=500 .... 500 cards   <- session setting works
-    ?pg=1 ............................. 20 cards    <- pg overrides it
-    ?pg=2 ............................. 20 cards
-    ?pg=2&recnum=500 .................. 20 cards    <- not a URL param
-    ?sf_page=2 ........................ 600 cards, but IDENTICAL to page 1
-                                                    (unknown param, ignored)
-
-So page 1 can be large, but no known URL gives a large page 2. Rather than
-guess, this script PROBES page 2 with several strategies and measures each by
-two criteria:
-
-    1. how many cards came back, and
-    2. how many of those products were NOT on page 1
-
-Criterion 2 is what rules out ?sf_page - a big page that just repeats page 1
-is worse than useless. The first strategy that returns a large page of genuinely
-new products wins and is used for the rest of the run.
-
-If no strategy gives a large page, the script falls back to whatever DID
-paginate correctly at 20/page (known to work, ~300 pages) so the run still
-finishes with the complete dataset. It tells you which path it took.
-
-Rows are written to the CSV after every page and flushed, so an interrupted run
-still leaves you with everything scraped up to that point.
+PB Tech "Hot Deals" and "Clearance" scraper  ->  cat.csv
 """
 
 from __future__ import annotations
@@ -51,11 +15,13 @@ import requests
 from bs4 import BeautifulSoup
 
 BASE = "https://www.pbtech.co.nz"
-DEALS_URL = f"{BASE}/hot-deals/shop-all"
+TARGET_URLS = [
+    f"{BASE}/hot-deals/shop-all",
+    f"{BASE}/promotions/clearance"
+]
 TOGGLE_RECORDS_URL = f"{BASE}/code/toggle_records_pdo.php"
 TOGGLE_GST_URL = f"{BASE}/code/toggle_gst_pdo.php"
 
-# A bare User-Agent gets 403 from Cloudflare; this full set gets through.
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -78,7 +44,6 @@ AJAX_HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     "X-Requested-With": "XMLHttpRequest",
     "Origin": BASE,
-    "Referer": DEALS_URL,
     "Accept": "*/*",
 }
 
@@ -90,12 +55,8 @@ PRICE_RE = re.compile(r"\d[\d,]*\.?\d*")
 PROMO_RE = re.compile(r"promo\s*code[:\s]*([A-Z0-9][A-Z0-9._-]+)", re.IGNORECASE)
 TOTAL_RE = re.compile(r"([\d,]{2,})\s+products", re.IGNORECASE)
 
-DEFAULT_PAGE_SIZE = 20   # what the site falls back to
+DEFAULT_PAGE_SIZE = 20
 
-
-# --------------------------------------------------------------------------- #
-# Parsing  (verified against the live card markup)
-# --------------------------------------------------------------------------- #
 
 def clean_text(node) -> str:
     return node.get_text(" ", strip=True) if node is not None else ""
@@ -114,7 +75,6 @@ def parse_price(text: str) -> float | None:
 
 
 def extract_part_number(card) -> str | None:
-    """Card container has no data-product-code - it's on the child anchors."""
     node = card.select_one("[data-product-code]")
     if node and node.get("data-product-code", "").strip():
         return node["data-product-code"].strip()
@@ -126,10 +86,6 @@ def extract_part_number(card) -> str | None:
 
 
 def extract_name(card) -> str | None:
-    """
-    title on the FIRST js-product-link. Never fall back to a bare a[title] -
-    the promo badge <a title="Featured in: Price Plummet"> would poison it.
-    """
     a = card.select_one("a.js-product-link[title]")
     if a and a.get("title", "").strip():
         return a["title"].strip()
@@ -146,7 +102,6 @@ def extract_promo_code(card) -> str | None:
 
 
 def extract_prices(card) -> tuple[float | None, float | None]:
-    """(original, discounted), GST-inclusive. Reads only .ginc wrappers."""
     promo = parse_price(clean_text(card.select_one(".item-price-label .ginc .fw-semibold")))
     full = parse_price(clean_text(card.select_one(".item-price-amount .ginc .full-price")))
 
@@ -191,20 +146,18 @@ def parse_page(html: str) -> list[dict[str, Any]]:
     return rows
 
 
-# --------------------------------------------------------------------------- #
-# Session
-# --------------------------------------------------------------------------- #
-
 def new_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(HEADERS)
     return s
 
 
-def set_records(sess, recnum: int) -> None:
+def set_records(sess, recnum: int, referer: str) -> None:
+    headers = AJAX_HEADERS.copy()
+    headers["Referer"] = referer
     try:
         sess.post(TOGGLE_RECORDS_URL, data={"recnum": str(recnum)},
-                  headers=AJAX_HEADERS, timeout=30)
+                  headers=headers, timeout=30)
     except requests.RequestException as exc:
         print(f"[warn] recnum POST failed: {exc}", file=sys.stderr)
 
@@ -226,8 +179,7 @@ def gst_is_inclusive(html: str) -> bool | None:
     return None
 
 
-def ensure_gst(sess, html: str) -> None:
-    """toggle_gst_pdo.php FLIPS state - only call it when GST reads as off."""
+def ensure_gst(sess, html: str, referer: str) -> None:
     state = gst_is_inclusive(html)
     if state is True:
         print("[info] GST-inclusive pricing ON")
@@ -236,8 +188,10 @@ def ensure_gst(sess, html: str) -> None:
         print("[warn] could not read GST state - leaving it alone", file=sys.stderr)
         return
     print("[info] GST was OFF - toggling")
-    sess.post(TOGGLE_GST_URL, data={}, headers=AJAX_HEADERS, timeout=30)
-    if gst_is_inclusive(sess.get(DEALS_URL, timeout=90).text) is not True:
+    headers = AJAX_HEADERS.copy()
+    headers["Referer"] = referer
+    sess.post(TOGGLE_GST_URL, data={}, headers=headers, timeout=30)
+    if gst_is_inclusive(fetch(sess, referer)) is not True:
         print("[warn] toggle did not take - prices may be EX-GST", file=sys.stderr)
 
 
@@ -248,15 +202,7 @@ def fetch(sess, url: str, referer: str | None = None) -> str:
     return r.text
 
 
-# --------------------------------------------------------------------------- #
-# Pagination strategy probe
-# --------------------------------------------------------------------------- #
-# Each strategy says how to build a page URL and what to do before requesting
-# it. We try them on page 2 and keep the first that returns a big page of
-# products page 1 did not have.
-
 STRATEGIES = [
-    # name, url template, re-POST recnum first, hit bare URL first, send Referer
     ("pg + repost",          "{base}?pg={page}",              True,  False, True),
     ("pg + repost + bare",   "{base}?pg={page}",              True,  True,  True),
     ("pg plain",             "{base}?pg={page}",              False, False, False),
@@ -265,16 +211,11 @@ STRATEGIES = [
 ]
 
 
-def build_url(tmpl: str, page: int, recnum: int) -> str:
-    return tmpl.format(base=DEALS_URL, page=page, rec=recnum)
+def build_url(tmpl: str, base_url: str, page: int, recnum: int) -> str:
+    return tmpl.format(base=base_url, page=page, rec=recnum)
 
 
-def probe_pagination(sess, recnum: int, page1_parts: set[str]):
-    """
-    Try each strategy on page 2. Return (strategy, rows) for the first that
-    gives a LARGE page of NEW products, else the first that gives ANY new
-    products (small-page fallback), else None.
-    """
+def probe_pagination(sess, base_url: str, recnum: int, page1_parts: set[str]):
     print("\n[probe] testing how to reach page 2 at %d/page ..." % recnum)
     small_fallback = None
 
@@ -282,11 +223,11 @@ def probe_pagination(sess, recnum: int, page1_parts: set[str]):
         name, tmpl, repost, bare_first, send_ref = strat
         try:
             if repost:
-                set_records(sess, recnum)
+                set_records(sess, recnum, base_url)
             if bare_first:
-                fetch(sess, DEALS_URL)
-            html = fetch(sess, build_url(tmpl, 2, recnum),
-                         referer=DEALS_URL if send_ref else None)
+                fetch(sess, base_url)
+            html = fetch(sess, build_url(tmpl, base_url, 2, recnum),
+                         referer=base_url if send_ref else None)
         except requests.RequestException as exc:
             print(f"[probe]   {name:22s} -> request failed ({exc})")
             continue
@@ -297,7 +238,7 @@ def probe_pagination(sess, recnum: int, page1_parts: set[str]):
         print(f"[probe]   {name:22s} -> {len(rows):4d} cards, {fresh:4d} new")
 
         if fresh == 0:
-            continue                      # repeat of page 1 - useless
+            continue                      
         if len(rows) > DEFAULT_PAGE_SIZE:
             print(f"[probe] using '{name}'\n")
             return strat, rows
@@ -312,10 +253,6 @@ def probe_pagination(sess, recnum: int, page1_parts: set[str]):
     return small_fallback if small_fallback else (None, None)
 
 
-# --------------------------------------------------------------------------- #
-# Main crawl
-# --------------------------------------------------------------------------- #
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="Scrape PB Tech hot deals to CSV")
     ap.add_argument("--out", default="cat.csv")
@@ -325,24 +262,6 @@ def main() -> None:
     args = ap.parse_args()
 
     sess = new_session()
-
-    # --- page 1: bare URL, which we know honours the session page size -------
-    print("[info] opening", DEALS_URL)
-    fetch(sess, DEALS_URL)                       # establish session
-    set_records(sess, args.recnum)
-    html = fetch(sess, DEALS_URL)
-    ensure_gst(sess, html)
-
-    m = TOTAL_RE.search(BeautifulSoup(html, "lxml").get_text(" "))
-    if m:
-        print(f"[info] site reports {int(m.group(1).replace(',', '')):,} products")
-
-    rows = parse_page(html)
-    print(f"[info] page 1: {len(rows)} cards")
-    if not rows:
-        sys.exit("No products on page 1 - the card markup may have changed.")
-
-    # --- open the CSV now and write as we go --------------------------------
     seen: set[str] = set()
     signatures: set[frozenset] = set()
     total = 0
@@ -367,56 +286,74 @@ def main() -> None:
             total += len(new)
             return len(new)
 
-        n = flush(rows)
-        signatures.add(frozenset(r["Part Number"] or "" for r in rows))
-        print(f"[info] page 1: {n} new, {total} total  (written)")
+        for target_url in TARGET_URLS:
+            print(f"\n[info] =========================================")
+            print(f"[info] SCRAPING: {target_url}")
+            print(f"[info] =========================================")
 
-        # --- work out how to reach page 2 ------------------------------------
-        strat, page2_rows = probe_pagination(sess, args.recnum, seen)
-        if strat is None:
-            print("[error] cannot paginate - only page 1 was saved.", file=sys.stderr)
-            return
+            fetch(sess, target_url)                       
+            set_records(sess, args.recnum, target_url)
+            html = fetch(sess, target_url)
+            ensure_gst(sess, html, target_url)
 
-        name, tmpl, repost, bare_first, send_ref = strat
-        page_size = max(len(page2_rows), DEFAULT_PAGE_SIZE)
-
-        n = flush(page2_rows)
-        signatures.add(frozenset(r["Part Number"] or "" for r in page2_rows))
-        print(f"[info] page 2: {len(page2_rows)} cards, {n} new, {total} total  (written)")
-
-        # --- pages 3..N -------------------------------------------------------
-        for page in range(3, args.max_pages + 1):
-            time.sleep(args.delay)
-            try:
-                if repost:
-                    set_records(sess, args.recnum)
-                if bare_first:
-                    fetch(sess, DEALS_URL)
-                html = fetch(sess, build_url(tmpl, page, args.recnum),
-                             referer=DEALS_URL if send_ref else None)
-            except requests.RequestException as exc:
-                print(f"[warn] page {page} failed ({exc}) - stopping", file=sys.stderr)
-                break
+            m = TOTAL_RE.search(BeautifulSoup(html, "lxml").get_text(" "))
+            if m:
+                print(f"[info] site reports {int(m.group(1).replace(',', '')):,} products")
 
             rows = parse_page(html)
+            print(f"[info] page 1: {len(rows)} cards")
             if not rows:
-                print(f"[info] page {page}: 0 products - done")
-                break
-
-            sig = frozenset(r["Part Number"] or "" for r in rows)
-            if sig in signatures:
-                print(f"[info] page {page}: repeat of an earlier page - done")
-                break
-            signatures.add(sig)
+                print(f"[warn] No products on page 1 of {target_url}. Skipping.")
+                continue
 
             n = flush(rows)
-            print(f"[info] page {page}: {len(rows)} cards, {n} new, {total} total  (written)")
+            signatures.add(frozenset(r["Part Number"] or "" for r in rows))
+            print(f"[info] page 1: {n} new, {total} total  (written)")
 
-            if n == 0:
-                print("[info] no new products - done")
-                break
+            strat, page2_rows = probe_pagination(sess, target_url, args.recnum, seen)
+            if strat is None:
+                print(f"[error] cannot paginate {target_url} - moving to next category.", file=sys.stderr)
+                continue
 
-    print(f"\n[done] {total} products -> {args.out}")
+            name, tmpl, repost, bare_first, send_ref = strat
+            page_size = max(len(page2_rows), DEFAULT_PAGE_SIZE)
+
+            n = flush(page2_rows)
+            signatures.add(frozenset(r["Part Number"] or "" for r in page2_rows))
+            print(f"[info] page 2: {len(page2_rows)} cards, {n} new, {total} total  (written)")
+
+            for page in range(3, args.max_pages + 1):
+                time.sleep(args.delay)
+                try:
+                    if repost:
+                        set_records(sess, args.recnum, target_url)
+                    if bare_first:
+                        fetch(sess, target_url)
+                    html = fetch(sess, build_url(tmpl, target_url, page, args.recnum),
+                                 referer=target_url if send_ref else None)
+                except requests.RequestException as exc:
+                    print(f"[warn] page {page} failed ({exc}) - stopping", file=sys.stderr)
+                    break
+
+                rows = parse_page(html)
+                if not rows:
+                    print(f"[info] page {page}: 0 products - done")
+                    break
+
+                sig = frozenset(r["Part Number"] or "" for r in rows)
+                if sig in signatures:
+                    print(f"[info] page {page}: repeat of an earlier page - done")
+                    break
+                signatures.add(sig)
+
+                n = flush(rows)
+                print(f"[info] page {page}: {len(rows)} cards, {n} new, {total} total  (written)")
+
+                if n == 0:
+                    print("[info] no new products - done")
+                    break
+
+    print(f"\n[done] {total} unique products across all categories -> {args.out}")
 
 
 if __name__ == "__main__":
