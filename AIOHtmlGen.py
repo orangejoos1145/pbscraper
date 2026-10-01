@@ -13,7 +13,8 @@ WHAT IT DOES
       PROMO   - promo code and a real before/after price
       SPECIAL - discounted, but no promo code (PB's "Special price" items)
       UNKNOWN - no discounted price, so the saving can't be worked out
-  * assigns a category from the product name, with the part-number prefix as a
+  * uses PB Tech's own category when the CSV has one (newScrape.py collects it);
+    otherwise assigns one from the product name, with the part-number prefix as a
     tiebreaker (CATEGORY_RULES / PREFIX_HINTS below are heuristics - edit them)
   * stamps the page with the time this script ran
 
@@ -45,6 +46,30 @@ import webbrowser
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+
+# --------------------------------------------------------------------------- #
+# Money: ads + affiliate links.  Everything is OFF while these are blank.
+# --------------------------------------------------------------------------- #
+# 1. Paste your AdSense publisher ID (AdSense > Account > Account information).
+#    With ONLY this set, Google "Auto ads" place ads for you (turn Auto ads on in
+#    your AdSense dashboard). The script also writes ads.txt + privacy.html.
+ADSENSE_CLIENT = ""            # e.g. "ca-pub-1234567890123456"
+
+# 2. Optional: your own ad units (AdSense > Ads > By ad unit > Display ads).
+#    Paste just the data-ad-slot number of each. Leave blank to skip that spot.
+AD_SLOT_TOP = ""               # banner between the filters and the results
+AD_SLOT_FEED = ""              # full-width ad between rows of product cards
+AD_FEED_EVERY = 16             # cards between in-feed ads
+AD_FEED_MAX_PER_PAGE = 2       # cap, so ads never crowd the deals
+
+# 3. Optional: affiliate link wrapper for "View on PB Tech" links, if you join a
+#    network that offers one. Use {url} where the product link goes, e.g.
+#    "https://network.example/click?id=123&url={url}"
+AFFILIATE_URL = ""
+
+# 4. Shown on privacy.html (AdSense requires a privacy policy).
+CONTACT_EMAIL = ""             # e.g. "you@example.com"
+
 
 # --------------------------------------------------------------------------- #
 # Categorisation - edit freely, first match wins
@@ -235,7 +260,7 @@ def load(csv_path: Path):
 
         out.append([
             part or "-", name or "(no name)", orig, disc, pct, promo or "",
-            categorise(name, part),
+            (r.get("Category") or "").strip() or categorise(name, part),   # PB's own category if newScrape found it
             {"promo": 0, "special": 1, "unknown": 2}[status],
             image,
         ])
@@ -266,6 +291,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+__ADS_HEAD__
 <style>
 :root{
   --page:#070A10; --panel:#0F1D34; --panel2:#132744;
@@ -458,6 +484,14 @@ select.field option{background:#13284A;color:#fff}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);z-index:140;opacity:0;pointer-events:none;transition:opacity .25s}
 .overlay.on{opacity:1;pointer-events:auto}
 .drawer-head{display:none}
+
+/* ---------------- ads ---------------- */
+.ad{grid-column:1/-1;background:var(--surface);border:1px dashed var(--line);border-radius:16px;padding:8px 10px 10px;overflow:hidden}
+.ad-top{margin-top:16px}
+.ad-label{display:block;font-size:9.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.ad:has(ins[data-ad-status="unfilled"]){display:none}      /* no ad available -> no empty box */
+.foot{max-width:1400px;margin:0 auto;padding:6px 22px 34px;text-align:center;font-size:12px;color:var(--faint)}
+.foot a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .mobile-search{display:none}
 
 /* ---------------- phones & small screens: slide-out filters ---------------- */
@@ -584,6 +618,7 @@ select.field option{background:#13284A;color:#fff}
     </div>
   </header>
 
+  __AD_TOP__
   <div class="pbar" id="pbarTop">
     <div class="title"><h2 id="heading">All deals</h2><span class="range" id="range"></span></div>
     <select class="sel" id="rows" aria-label="Per page">
@@ -609,12 +644,14 @@ select.field option{background:#13284A;color:#fff}
     </div>
   </div>
 </div>
+<footer class="foot">Prices and stock from pbtech.co.nz at the time of scraping and may have changed. Not affiliated with PB Tech.__FOOT_LINKS__</footer>
 <div class="overlay" id="overlay"></div>
 <button class="totop" id="totop" aria-label="Back to top"><i class="fa-solid fa-arrow-up"></i></button>
 <div class="toast" id="toast"></div>
 
 <script>
 const RAW = __DATA__;
+const ADS = __ADS_JSON__;
 const STATUS=["promo","special","unknown"];
 const D=RAW.map(r=>{
   const now=r[3]!=null?r[3]:r[2];
@@ -625,7 +662,8 @@ const D=RAW.map(r=>{
 const HAS_IMAGES=D.some(d=>d.img);
 
 const slug=n=>n.replace(/ /g,"-").replace(/[^A-Za-z0-9-]/g,"").slice(0,50).replace(/-+$/,"");
-const pbUrl=d=>`https://www.pbtech.co.nz/product/${encodeURIComponent(d.part)}/${slug(d.name)}`;
+const rawPbUrl=d=>`https://www.pbtech.co.nz/product/${encodeURIComponent(d.part)}/${slug(d.name)}`;
+const pbUrl=d=>ADS.affiliate?ADS.affiliate.replace("{url}",encodeURIComponent(rawPbUrl(d))):rawPbUrl(d);
 const gUrl=d=>`https://www.google.com/search?q=${encodeURIComponent(d.part+" "+d.name.slice(0,70))}`;
 const $=s=>document.querySelector(s);
 const $$=s=>document.querySelectorAll(s);
@@ -649,7 +687,14 @@ const CAT_ICON={"Storage & NAS":"fa-hard-drive","Phones & Wearables":"fa-mobile-
   "PC Peripherals":"fa-keyboard","Networking":"fa-wifi","Security & Surveillance":"fa-shield-halved","Smart Home & Appliances":"fa-house-signal",
   "Furniture & Mounts":"fa-chair","Cables & Power":"fa-plug","Printing & Office":"fa-print","POS & Barcode":"fa-barcode","Car & Travel":"fa-car",
   "Tools & Workshop":"fa-screwdriver-wrench","Gift Cards & Services":"fa-gift","Other":"fa-box-open"};
-const icon=c=>CAT_ICON[c]||"fa-box-open";
+const ICON_RULES=[[/laptop|notebook|macbook|chromebook/,"fa-laptop"],[/tablet|ipad/,"fa-tablet-screen-button"],[/phone|mobile/,"fa-mobile-screen"],
+  [/watch|wearable|fitness/,"fa-clock"],[/monitor|display|screen|tv|television|projector/,"fa-desktop"],[/audio|headphone|speaker|sound|earbud/,"fa-headphones"],
+  [/camera|drone|photo|video/,"fa-camera"],[/gaming|game|console/,"fa-gamepad"],[/storage|drive|ssd|nas|memory card/,"fa-hard-drive"],
+  [/component|cpu|graphics|motherboard|ram|parts/,"fa-microchip"],[/keyboard|mouse|peripheral/,"fa-keyboard"],[/network|router|wifi|modem/,"fa-wifi"],
+  [/security|surveillance|cctv/,"fa-shield-halved"],[/smart home|appliance|kitchen|vacuum|home/,"fa-house-signal"],[/cable|power|charger|battery|adapter/,"fa-plug"],
+  [/print|office|ink|toner|scanner/,"fa-print"],[/furniture|chair|desk|mount/,"fa-chair"],[/car|auto|travel/,"fa-car"],[/tool/,"fa-screwdriver-wrench"],
+  [/gift|software|service|licen/,"fa-gift"],[/computer|desktop|pc/,"fa-computer"],[/toy|kid|hobby/,"fa-puzzle-piece"],[/health|beauty|personal/,"fa-heart-pulse"]];
+const icon=c=>{if(CAT_ICON[c])return CAT_ICON[c];const n=(c||"").toLowerCase();for(const [re,ic] of ICON_RULES)if(re.test(n))return ic;return "fa-box-open"};
 
 /* ---------------- sorting: Sort + Then by ---------------- */
 const num=(v,miss)=>(typeof v==="number"&&!isNaN(v))?v:miss;
@@ -661,19 +706,33 @@ const SORTS={
   name:      {label:"Name (A–Z)",          cmp:(a,b)=>a.name.localeCompare(b.name)},
 };
 const THEN={
-  pct:       [["price_asc","Lowest Price"],["price_desc","Highest Price"],["save","Biggest Saving ($)"],["name","Name (A–Z)"]],
-  save:      [["pct","Biggest Discount (%)"],["price_asc","Lowest Price"],["name","Name (A–Z)"]],
+  pct:       [["price_asc","Lowest Price"],["price_desc","Highest Price"],["save","Biggest Saving ($)"],["name","Name (A–Z)"],["none","Nothing (exact % order)"]],
+  save:      [["pct","Biggest Discount (%)"],["price_asc","Lowest Price"],["name","Name (A–Z)"],["none","Nothing (exact $ order)"]],
   price_asc: [["pct","Biggest Discount (%)"],["save","Biggest Saving ($)"],["name","Name (A–Z)"],["none","Nothing (exact price order)"]],
   price_desc:[["pct","Biggest Discount (%)"],["save","Biggest Saving ($)"],["name","Name (A–Z)"],["none","Nothing (exact price order)"]],
   name:      [],
 };
 const THEN_DEFAULT={pct:"price_asc",save:"pct",price_asc:"pct",price_desc:"pct"};
-const HINT={pct:"Breaks ties - lots of deals share the same % off.",save:"Breaks ties between equal savings.",
+const HINT={pct:"Groups discounts into ranges (70%+, 50–70%…), then sorts inside each.",
+  save:"Groups savings into ranges ($500+, $200–500…), then sorts inside each.",
   price_asc:"Groups prices into ranges, best deals first in each.",price_desc:"Groups prices into ranges, best deals first in each."};
-const BANDS=[25,50,100,250,500,1000,2000];
-const band=p=>{if(typeof p!=="number")return -1;let i=0;while(i<BANDS.length&&p>=BANDS[i])i++;return i};
+
+/* Ranges used to group results when a "Then by" is chosen.
+   Each: thresholds (ascending), whether higher ranges come first, the value, and a label. */
 const fmtB=v=>"$"+v.toLocaleString("en-NZ");
-const bandLabel=i=>i<0?"No price":i===0?`Under ${fmtB(BANDS[0])}`:i===BANDS.length?`${fmtB(BANDS[i-1])}+`:`${fmtB(BANDS[i-1])} – ${fmtB(BANDS[i])}`;
+const rangeIndex=(v,cuts)=>{if(typeof v!=="number"||isNaN(v))return -1;let i=0;while(i<cuts.length&&v>=cuts[i])i++;return i};
+const RANGES={
+  price:{cuts:[25,50,100,250,500,1000,2000],value:d=>d.now,
+    label:(i,c)=>i<0?"No price":i===0?`Under ${fmtB(c[0])}`:i===c.length?`${fmtB(c[i-1])}+`:`${fmtB(c[i-1])} – ${fmtB(c[i])}`},
+  pct:{cuts:[10,20,30,40,50,70],value:d=>d.pct,
+    label:(i,c)=>i<0?"No discount":i===0?`Under ${c[0]}% off`:i===c.length?`${c[i-1]}%+ off`:`${c[i-1]}–${c[i]}% off`},
+  save:{cuts:[20,50,100,200,500],value:d=>d.save,
+    label:(i,c)=>i<0?"No saving":i===0?`Save under ${fmtB(c[0])}`:i===c.length?`Save ${fmtB(c[i-1])}+`:`Save ${fmtB(c[i-1])} – ${fmtB(c[i])}`},
+};
+const GROUPING={price_asc:["price",1],price_desc:["price",-1],pct:["pct",-1],save:["save",-1]};   // [range, direction]
+let groupBy=null;
+const groupOf=d=>{const r=RANGES[groupBy[0]];return rangeIndex(r.value(d),r.cuts)};
+const groupLabel=i=>{const r=RANGES[groupBy[0]];return r.label(i,r.cuts)};
 
 function updateThen(force){
   const opts=THEN[S.sort]||[];
@@ -687,7 +746,7 @@ function updateThen(force){
 /* ---------------- state ---------------- */
 const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,images:false,sort:"pct",then:"",page:1,rows:48};
 const S={...DEFAULTS,promos:new Set(),cats:new Set()};
-let view=[],grouped=false;
+let view=[];
 
 /* ---------------- chips ---------------- */
 function tally(key){const m=new Map();D.forEach(d=>{const v=d[key];if(v)m.set(v,(m.get(v)||0)+1)});return [...m.entries()].sort((a,b)=>b[1]-a[1])}
@@ -715,10 +774,9 @@ function pass(d){
 }
 function sortView(){
   const primary=SORTS[S.sort]||SORTS.pct, secondary=SORTS[S.then]||null;
-  const isPrice=S.sort==="price_asc"||S.sort==="price_desc";
-  grouped=isPrice&&!!secondary;
+  groupBy=(secondary&&GROUPING[S.sort])||null;
   view.sort((a,b)=>{
-    if(grouped){const x=band(a.now),y=band(b.now);if(x!==y)return S.sort==="price_desc"?y-x:x-y;
+    if(groupBy){const x=groupOf(a),y=groupOf(b);if(x!==y)return (x-y)*groupBy[1];
       return secondary.cmp(a,b)||primary.cmp(a,b)||a.name.localeCompare(b.name)}
     return primary.cmp(a,b)||(secondary?secondary.cmp(a,b):0)||a.name.localeCompare(b.name);
   });
@@ -744,7 +802,7 @@ function card(d){
     <a class="name" href="${esc(pbUrl(d))}" target="_blank" rel="noopener" title="${esc(d.name)}">${esc(d.name)}</a>
     <div class="meta"><span class="part" data-c="${esc(d.part)}" title="Copy part number">${esc(d.part)}</span>${tag}</div>
     <div class="prices">${price}</div>
-    <div class="actions"><a class="view" href="${esc(pbUrl(d))}" target="_blank" rel="noopener">View<span class="long"> on PB Tech</span> <i class="fa-solid fa-arrow-right"></i></a>
+    <div class="actions"><a class="view" href="${esc(pbUrl(d))}" target="_blank" rel="noopener"><span>View<span class="long">&nbsp;on PB Tech</span></span><i class="fa-solid fa-arrow-right"></i></a>
       <a class="gbtn" href="${esc(gUrl(d))}" target="_blank" rel="noopener" title="Compare prices on Google">G</a></div>
   </div></article>`;
 }
@@ -766,13 +824,21 @@ function render(){
   $$('[data-go="prev"]').forEach(x=>x.disabled=S.page<=1);$$('[data-go="next"]').forEach(x=>x.disabled=S.page>=pages);
   $("#empty").hidden=view.length>0;$("#pbarBottom").style.display=pages>1?"":"none";
 
-  const counts={};if(grouped)view.forEach(d=>{const k=band(d.now);counts[k]=(counts[k]||0)+1});
-  let last=null,html="";
+  const counts={};if(groupBy)view.forEach(d=>{const k=groupOf(d);counts[k]=(counts[k]||0)+1});
+  /* In-feed ads only go between complete rows, so they never leave a half-empty row. */
+  const cols=Math.max(1,getComputedStyle($("#grid")).gridTemplateColumns.split(" ").filter(Boolean).length);
+  let last=null,html="",rowPos=0,sinceAd=0,ads=0;
   for(const d of view.slice(a,b)){
-    if(grouped){const k=band(d.now);if(k!==last){html+=`<div class="band"><b>${bandLabel(k)}</b><span>${counts[k].toLocaleString()} deals</span></div>`;last=k}}
+    if(groupBy&&groupOf(d)!==last)rowPos=0;                 /* a range header starts a fresh row */
+    if(ADS.feedSlot&&rowPos===0&&sinceAd>=ADS.every&&ads<ADS.maxPerPage){
+      html+=`<div class="ad ad-feed"><span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block" data-ad-client="${ADS.client}" data-ad-slot="${ADS.feedSlot}" data-ad-format="auto" data-full-width-responsive="true"></ins></div>`;
+      ads++;sinceAd=0}
+    rowPos=(rowPos+1)%cols;sinceAd++;
+    if(groupBy){const k=groupOf(d);if(k!==last){html+=`<div class="band"><b>${groupLabel(k)}</b><span>${counts[k].toLocaleString()} deals</span></div>`;last=k}}
     html+=card(d);
   }
   const grid=$("#grid");grid.innerHTML=html;
+  grid.querySelectorAll("ins.adsbygoogle").forEach(()=>{try{(window.adsbygoogle=window.adsbygoogle||[]).push({})}catch(e){}});
   grid.querySelectorAll(".card").forEach(c=>reveal.observe(c));
   grid.querySelectorAll(".media img").forEach(img=>{
     const ph=img.previousElementSibling;
@@ -836,6 +902,7 @@ addEventListener("keydown",e=>{
 addEventListener("scroll",()=>$("#totop").classList.toggle("on",scrollY>700),{passive:true});
 $("#totop").onclick=()=>scrollTo({top:0,behavior:"smooth"});
 
+if(ADS.topSlot){try{(window.adsbygoogle=window.adsbygoogle||[]).push({})}catch(e){}}
 updateThen(true);
 let saved=null;try{saved=localStorage.getItem("pbtheme")}catch(e){}
 if(saved)setTheme(saved);else render();
@@ -845,15 +912,84 @@ if(saved)setTheme(saved);else render();
 """
 
 
-def build(rows, generated: str) -> str:
+CLIENT_RE = re.compile(r"^ca-pub-\d{10,20}$")
+
+
+def ads_config() -> dict:
+    """Ad settings for the page. Ads stay off unless ADSENSE_CLIENT looks valid."""
+    client = ADSENSE_CLIENT.strip()
+    if client and not CLIENT_RE.match(client):
+        print(f"[warn] ADSENSE_CLIENT '{client}' doesn't look like ca-pub-XXXXXXXXXXXXXXXX - ads left off")
+        client = ""
+    slot = lambda v: str(v).strip() if client and str(v).strip().isdigit() else ""
+    affiliate = AFFILIATE_URL.strip() if "{url}" in AFFILIATE_URL else ""
+    if AFFILIATE_URL.strip() and not affiliate:
+        print("[warn] AFFILIATE_URL needs {url} in it - affiliate links left off")
+    return {"client": client, "topSlot": slot(AD_SLOT_TOP), "feedSlot": slot(AD_SLOT_FEED),
+            "every": max(4, int(AD_FEED_EVERY)), "maxPerPage": max(0, int(AD_FEED_MAX_PER_PAGE)),
+            "affiliate": affiliate}
+
+
+def build(rows, generated: str, ads: dict) -> str:
     data = json.dumps(rows, separators=(",", ":")).replace("</", "<\\/")
+    head = top = links = ""
+    if ads["client"]:
+        head = (f'<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={ads["client"]}" '
+                f'crossorigin="anonymous"></script>')
+        links = ' &middot; <a href="privacy.html">Privacy</a>'
+    if ads["topSlot"]:
+        top = (f'<div class="ad ad-top"><span class="ad-label">Advertisement</span>'
+               f'<ins class="adsbygoogle" style="display:block" data-ad-client="{ads["client"]}" data-ad-slot="{ads["topSlot"]}" '
+               f'data-ad-format="auto" data-full-width-responsive="true"></ins></div>')
     return (TEMPLATE
+            .replace("__ADS_HEAD__", head)
+            .replace("__AD_TOP__", top)
+            .replace("__FOOT_LINKS__", links)
+            .replace("__ADS_JSON__", json.dumps(ads))
             .replace("__FAV_SVG__", FAVICON_SVG)
             .replace("__FAV_32__", FAVICON_32)
             .replace("__FAV_180__", FAVICON_180)
             .replace("__GENERATED__", generated)
             .replace("__COUNT__", f"{len(rows):,}")
             .replace("__DATA__", data))
+
+
+PRIVACY_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy - PB Deals</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,__FAV_SVG__">
+<style>
+body{margin:0;background:#070A10;color:#E9EFF7;font:16px/1.65 Inter,-apple-system,"Segoe UI",sans-serif}
+main{max-width:720px;margin:0 auto;padding:40px 22px 60px}
+h1{font-size:28px;margin:0 0 4px}h2{font-size:18px;margin:28px 0 6px;color:#FFB45C}
+p,li{color:#C3D0E0}a{color:#FFB45C}small{color:#7F93AD}
+</style></head><body><main>
+<h1>Privacy</h1><small>Last updated __DATE__</small>
+<h2>What this site is</h2>
+<p>PB Deals lists discounted products scraped from pbtech.co.nz. It is not affiliated with PB Tech. Prices may have changed since the last update.</p>
+<h2>Information we collect</h2>
+<p>This site has no accounts and no forms, and doesn't collect your name, email or other personal details. Your light/dark theme choice is saved in your own browser (local storage) and never leaves your device.</p>
+<h2>Advertising and cookies</h2>
+<p>This site shows ads from Google AdSense. Google and its partners use cookies to serve ads based on your visits to this and other websites.
+You can learn how Google uses this information at <a href="https://policies.google.com/technologies/partner-sites">policies.google.com/technologies/partner-sites</a>,
+and turn off personalised ads at <a href="https://adssettings.google.com">adssettings.google.com</a>.</p>
+<h2>Links to other sites</h2>
+<p>Product links go to pbtech.co.nz (and Google search), which have their own privacy policies.__AFF_NOTE__</p>
+__CONTACT__
+<p><a href="./">&larr; Back to the deals</a></p>
+</main></body></html>
+"""
+
+
+def write_ad_files(out: Path, ads: dict) -> None:
+    pub = ads["client"].replace("ca-", "", 1)                 # ads.txt uses pub-XXXX
+    (out.parent / "ads.txt").write_text(f"google.com, {pub}, DIRECT, f08c47fec0942fa0\n", encoding="utf-8")
+    contact = (f"<h2>Contact</h2><p>Questions: <a href=\"mailto:{CONTACT_EMAIL.strip()}\">{CONTACT_EMAIL.strip()}</a></p>"
+               if CONTACT_EMAIL.strip() else "")
+    aff = " Some product links may be affiliate links, which can earn this site a small commission at no cost to you." if ads["affiliate"] else ""
+    page = (PRIVACY_PAGE.replace("__FAV_SVG__", FAVICON_SVG).replace("__DATE__", datetime.now().strftime("%d %B %Y"))
+            .replace("__CONTACT__", contact).replace("__AFF_NOTE__", aff))
+    (out.parent / "privacy.html").write_text(page, encoding="utf-8")
 
 
 def main() -> None:
@@ -873,7 +1009,10 @@ def main() -> None:
 
     generated = datetime.now().strftime("%d/%m/%Y at %I:%M %p").lstrip("0")
     out = Path(args.out)
-    out.write_text(build(rows, generated), encoding="utf-8")
+    ads = ads_config()
+    out.write_text(build(rows, generated, ads), encoding="utf-8")
+    if ads["client"]:
+        write_ad_files(out, ads)
 
     st = Counter(r[7] for r in rows)
     cats = Counter(r[6] for r in rows)
@@ -890,6 +1029,17 @@ def main() -> None:
     if cats.get(OTHER, 0) > len(rows) * 0.25:
         print(f"       note: {cats[OTHER]:,} landed in 'Other' - "
               f"add keywords to CATEGORY_RULES to sharpen this")
+
+    if ads["client"]:
+        units = [n for n, v in (("top banner", ads["topSlot"]), ("in-feed", ads["feedSlot"])) if v]
+        print(f"       ads ON ({ads['client']}) - " + (", ".join(units) + " units" if units else "Auto ads only")
+              + "; wrote ads.txt + privacy.html")
+        if not CONTACT_EMAIL.strip():
+            print("       tip: set CONTACT_EMAIL so privacy.html has a contact - AdSense reviewers look for one")
+    else:
+        print("       ads off (set ADSENSE_CLIENT at the top of this file to turn them on)")
+    if ads["affiliate"]:
+        print("       affiliate links ON")
 
     if args.open:
         webbrowser.open(out.resolve().as_uri())
