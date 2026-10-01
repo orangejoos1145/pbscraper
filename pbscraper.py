@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from typing import Any
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -48,7 +49,7 @@ AJAX_HEADERS = {
 }
 
 CSV_FIELDS = [
-    "Part Number", "Name", "Original Price", "Discounted Price", "% Off", "Promo Code",
+    "Part Number", "Name", "Original Price", "Discounted Price", "% Off", "Promo Code", "Image",
 ]
 
 PRICE_RE = re.compile(r"\d[\d,]*\.?\d*")
@@ -101,6 +102,39 @@ def extract_promo_code(card) -> str | None:
     return m.group(1).strip().upper() if m else None
 
 
+IMG_ATTRS = ("data-src", "data-original", "data-lazy-src", "data-lazy", "src")
+SKIP_IMG = ("logo", "icon", "badge", "sprite", "placeholder", "loading", "blank", ".svg", ".gif")
+
+
+def _first_url(srcset: str) -> str:
+    return srcset.split(",")[0].strip().split(" ")[0] if srcset else ""
+
+
+def extract_image(card, part: str | None) -> str | None:
+    """Best product photo URL in the card. Prefers images whose URL contains
+    the part number or PB's product-image folder, skips logos/badges/icons."""
+    candidates = []
+    for node in card.select("img, picture source"):
+        urls = [node.get(a, "") for a in IMG_ATTRS]
+        urls += [_first_url(node.get("data-srcset", "")), _first_url(node.get("srcset", ""))]
+        for u in urls:
+            u = (u or "").strip()
+            if not u or u.startswith("data:"):
+                continue
+            low = u.lower()
+            if any(k in low for k in SKIP_IMG):
+                continue
+            score = 0
+            if part and part.lower() in low:
+                score += 2
+            if "imgprod" in low or "/product" in low:
+                score += 1
+            candidates.append((score, urljoin(BASE, u)))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c[0])[1]
+
+
 def extract_prices(card) -> tuple[float | None, float | None]:
     promo = parse_price(clean_text(card.select_one(".item-price-label .ginc .fw-semibold")))
     full = parse_price(clean_text(card.select_one(".item-price-amount .ginc .full-price")))
@@ -135,13 +169,15 @@ def parse_page(html: str) -> list[dict[str, Any]]:
     rows = []
     for card in soup.select(".js-product-card"):
         original, discounted = extract_prices(card)
+        part = extract_part_number(card)
         rows.append({
-            "Part Number": extract_part_number(card),
+            "Part Number": part,
             "Name": extract_name(card),
             "Original Price": original,
             "Discounted Price": discounted,
             "% Off": calc_percent_off(original, discounted),
             "Promo Code": extract_promo_code(card),
+            "Image": extract_image(card, part),
         })
     return rows
 
@@ -265,13 +301,14 @@ def main() -> None:
     seen: set[str] = set()
     signatures: set[frozenset] = set()
     total = 0
+    with_image = 0
 
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
 
         def flush(batch) -> int:
-            nonlocal total
+            nonlocal total, with_image
             new = []
             for r in batch:
                 pn = r["Part Number"]
@@ -284,6 +321,7 @@ def main() -> None:
                 writer.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in CSV_FIELDS})
             fh.flush()
             total += len(new)
+            with_image += sum(1 for r in new if r.get("Image"))
             return len(new)
 
         for target_url in TARGET_URLS:
@@ -354,7 +392,11 @@ def main() -> None:
                     break
 
     print(f"\n[done] {total} unique products across all categories -> {args.out}")
+    print(f"[done] product images found for {with_image} of {total} products")
+    if total and with_image == 0:
+        print("[warn] no product images found - send Claude the HTML of one product card "
+              "(right-click a product > Inspect) so the image selector can be fixed", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    main()
+    main()
