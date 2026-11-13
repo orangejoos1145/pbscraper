@@ -58,6 +58,7 @@ CSV_FIELDS = [
 # If PB Tech uses another icon file for BF, just add a fragment here.
 BF_ICON_MARKERS = (
     "20261110130548_icon-64x64",
+    "20261110130517_icon-64x64",
 )
 
 PRICE_RE = re.compile(r"\d[\d,]*\.?\d*")
