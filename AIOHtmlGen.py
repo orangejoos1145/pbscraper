@@ -16,6 +16,8 @@ WHAT IT DOES
   * uses PB Tech's own category when the CSV has one (newScrape.py collects it);
     otherwise assigns one from the product name, with the part-number prefix as a
     tiebreaker (CATEGORY_RULES / PREFIX_HINTS below are heuristics - edit them)
+  * flags rows whose "Black Friday" column is 1 (pbscraper.py sets it when it sees the
+    BF promo icon) - they get a BLACK FRIDAY promo chip and a gold-flared card
   * stamps the page with the time this script ran
 
 THE PAGE
@@ -243,6 +245,7 @@ def load(csv_path: Path):
         disc = to_float(r.get("Discounted Price"))
         pct = to_float(r.get("% Off"))
         promo = (r.get("Promo Code") or "").strip().upper() or None
+        bf = (r.get("Black Friday") or "").strip().lower() in ("1", "true", "yes", "y")
 
         if disc is None or orig is None:
             status, pct = "unknown", None
@@ -263,6 +266,7 @@ def load(csv_path: Path):
             (r.get("Category") or "").strip() or categorise(name, part),   # PB's own category if newScrape found it
             {"promo": 0, "special": 1, "unknown": 2}[status],
             image,
+            1 if bf else 0,                      # [9] Black Friday promo icon spotted by the scraper
         ])
 
     return out, dupes, unnamed
@@ -387,11 +391,6 @@ select.field option{background:#13284A;color:#fff}
 .flabel{font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--hdr-muted);flex:none;width:70px}
 .sortbox{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .sortbox select{width:auto;min-width:190px}
-.thenby{display:flex;align-items:center;gap:8px;animation:fadeIn .25s ease}
-.thenby[hidden]{display:none}
-.thenby .arrow{color:var(--accent2);font-size:12px}
-.thenby .lbl{font-size:12px;color:var(--hdr-muted);font-weight:600;white-space:nowrap}
-.hint{font-size:11.5px;color:var(--hdr-muted);margin-left:4px}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 
 .chipsrow{display:flex;gap:10px;align-items:flex-start;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.09)}
@@ -421,12 +420,6 @@ select.field option{background:#13284A;color:#fff}
 .pbar.bottom .title,.pbar.bottom .sel{display:none}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
-.band{grid-column:1/-1;display:flex;align-items:center;gap:10px;margin:8px 0 -2px}
-.band:first-child{margin-top:0}
-.band b{font-family:"Space Grotesk",sans-serif;font-size:16px;white-space:nowrap}
-.band span{font-size:11.5px;font-weight:600;color:var(--muted);background:var(--surface);border:1px solid var(--line);padding:2px 9px;border-radius:99px;white-space:nowrap}
-.band::after{content:"";flex:1;height:1px;background:var(--line)}
-
 .card{position:relative;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line2);border-radius:16px;overflow:hidden;
   box-shadow:var(--shadow);transition:transform .2s,border-color .2s,box-shadow .2s;opacity:0;transform:translateY(10px);
   content-visibility:auto;contain-intrinsic-size:340px}
@@ -494,6 +487,33 @@ select.field option{background:#13284A;color:#fff}
 .foot a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .mobile-search{display:none}
 
+/* ---------------- BLACK FRIDAY ---------------- */
+.chip.bf{position:relative;overflow:hidden;background:linear-gradient(135deg,#0B0B0B,#2A1D04);border-color:#F5C84B;color:#FFE08A;
+  font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  box-shadow:0 0 0 1px rgba(245,200,75,.25),0 0 18px -4px rgba(245,200,75,.6)}
+.chip.bf i{color:#FFD76A;opacity:1}
+.chip.bf:hover{border-color:#FFE08A;color:#FFF3C4}
+.chip.bf::after{content:"";position:absolute;inset:0;pointer-events:none;transform:translateX(-120%);
+  background:linear-gradient(110deg,transparent 35%,rgba(255,235,160,.45) 50%,transparent 65%);animation:bfsweep 3.2s ease-in-out infinite}
+.chip.bf[aria-pressed="true"]{background:linear-gradient(135deg,#FFE08A,#F5B400 55%,#FFD76A);border-color:#FFF3C4;color:#1A1200}
+.chip.bf[aria-pressed="true"] i,.chip.bf[aria-pressed="true"] .n{color:#1A1200;opacity:.9}
+@keyframes bfsweep{0%,55%{transform:translateX(-120%)}100%{transform:translateX(120%)}}
+.card.bf{border:1px solid transparent;
+  background:linear-gradient(var(--surface),var(--surface)) padding-box,
+             linear-gradient(120deg,#8A6208,#FFD76A,#FFF3B0,#C99700,#8A6208) border-box;
+  background-size:auto,300% 100%;animation:bfborder 5s linear infinite;
+  box-shadow:0 0 0 1px rgba(245,200,75,.3),0 16px 42px -16px rgba(245,180,0,.55),var(--shadow)}
+.card.bf::before{height:4px;background:linear-gradient(90deg,#8A6208,#FFD76A,#FFF3B0,#FFD76A,#8A6208)}
+.card.bf:hover{border-color:transparent;box-shadow:0 0 0 1px rgba(255,224,138,.65),0 22px 52px -14px rgba(245,180,0,.75),var(--shadow)}
+@keyframes bfborder{to{background-position:0 0,300% 0}}
+.bfbanner{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:9px;padding:8px 10px 7px;
+  background:linear-gradient(90deg,#050505,#211704 50%,#050505);color:#FFD76A;border-bottom:1px solid rgba(245,200,75,.45);
+  font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:11.5px;letter-spacing:.28em;text-transform:uppercase;white-space:nowrap}
+.bfbanner i{font-size:11px;color:#FFE08A}
+.bfbanner::after{content:"";position:absolute;inset:0;pointer-events:none;transform:translateX(-120%);
+  background:linear-gradient(110deg,transparent 35%,rgba(255,235,160,.35) 50%,transparent 65%);animation:bfsweep 3.6s ease-in-out infinite}
+@media (max-width:900px){.bfbanner{font-size:10px;letter-spacing:.14em;gap:5px;padding:7px 6px 6px}}
+
 /* ---------------- phones & small screens: slide-out filters ---------------- */
 @media (max-width:900px){
   .shell{padding:12px 12px 40px}
@@ -522,10 +542,8 @@ select.field option{background:#13284A;color:#fff}
   .toggle{padding:4px 0}
   .sortrow,.chipsrow{flex-direction:column;align-items:stretch}
   .flabel{width:auto}
-  .sortbox,.thenby{flex-direction:column;align-items:stretch}
+  .sortbox{flex-direction:column;align-items:stretch}
   .sortbox select{width:100%;min-width:0}
-  .thenby .arrow{display:none}
-  .hint{margin:0}
   .pbar{margin:16px 0 12px}
   .pbar .title{width:100%}
   .pg{flex:1;justify-content:flex-end}
@@ -605,11 +623,6 @@ select.field option{background:#13284A;color:#fff}
             <option value="price_desc">Highest Price</option>
             <option value="name">Name (A–Z)</option>
           </select>
-          <div class="thenby" id="thenWrap">
-            <i class="fa-solid fa-arrow-turn-up fa-rotate-90 arrow"></i><span class="lbl">Then by</span>
-            <select class="field" id="then"></select>
-          </div>
-          <span class="hint" id="hint"></span>
         </div>
       </div>
 
@@ -653,11 +666,12 @@ select.field option{background:#13284A;color:#fff}
 const RAW = __DATA__;
 const ADS = __ADS_JSON__;
 const STATUS=["promo","special","unknown"];
+const BF="BLACK FRIDAY";
 const D=RAW.map(r=>{
   const now=r[3]!=null?r[3]:r[2];
-  return {part:r[0],name:r[1],orig:r[2],disc:r[3],pct:r[4],promo:r[5],cat:r[6],st:STATUS[r[7]],img:r[8]||"",
+  return {part:r[0],name:r[1],orig:r[2],disc:r[3],pct:r[4],promo:r[5],cat:r[6],st:STATUS[r[7]],img:r[8]||"",bf:!!r[9],pk:r[9]?BF:(r[5]||""),
     now, save:(r[3]!=null&&r[2]!=null)?Math.round((r[2]-r[3])*100)/100:null,
-    hay:(r[0]+" "+r[1]+" "+r[5]).toLowerCase()};
+    hay:(r[0]+" "+r[1]+" "+r[5]+(r[9]?" "+BF:"")).toLowerCase()};
 });
 const HAS_IMAGES=D.some(d=>d.img);
 
@@ -705,81 +719,38 @@ const SORTS={
   price_desc:{label:"Highest Price",       cmp:(a,b)=>num(b.now,-Infinity)-num(a.now,-Infinity)||0},
   name:      {label:"Name (A–Z)",          cmp:(a,b)=>a.name.localeCompare(b.name)},
 };
-const THEN={
-  pct:       [["price_asc","Lowest Price"],["price_desc","Highest Price"],["save","Biggest Saving ($)"],["name","Name (A–Z)"],["none","Nothing (exact % order)"]],
-  save:      [["pct","Biggest Discount (%)"],["price_asc","Lowest Price"],["name","Name (A–Z)"],["none","Nothing (exact $ order)"]],
-  price_asc: [["pct","Biggest Discount (%)"],["save","Biggest Saving ($)"],["name","Name (A–Z)"],["none","Nothing (exact price order)"]],
-  price_desc:[["pct","Biggest Discount (%)"],["save","Biggest Saving ($)"],["name","Name (A–Z)"],["none","Nothing (exact price order)"]],
-  name:      [],
-};
-const THEN_DEFAULT={pct:"price_asc",save:"pct",price_asc:"pct",price_desc:"pct"};
-const HINT={pct:"Groups discounts into ranges (70%+, 50–70%…), then sorts inside each.",
-  save:"Groups savings into ranges ($500+, $200–500…), then sorts inside each.",
-  price_asc:"Groups prices into ranges, best deals first in each.",price_desc:"Groups prices into ranges, best deals first in each."};
-
-/* Ranges used to group results when a "Then by" is chosen.
-   Each: thresholds (ascending), whether higher ranges come first, the value, and a label. */
-const fmtB=v=>"$"+v.toLocaleString("en-NZ");
-const rangeIndex=(v,cuts)=>{if(typeof v!=="number"||isNaN(v))return -1;let i=0;while(i<cuts.length&&v>=cuts[i])i++;return i};
-const RANGES={
-  price:{cuts:[25,50,100,250,500,1000,2000],value:d=>d.now,
-    label:(i,c)=>i<0?"No price":i===0?`Under ${fmtB(c[0])}`:i===c.length?`${fmtB(c[i-1])}+`:`${fmtB(c[i-1])} – ${fmtB(c[i])}`},
-  pct:{cuts:[10,20,30,40,50,70],value:d=>d.pct,
-    label:(i,c)=>i<0?"No discount":i===0?`Under ${c[0]}% off`:i===c.length?`${c[i-1]}%+ off`:`${c[i-1]}–${c[i]}% off`},
-  save:{cuts:[20,50,100,200,500],value:d=>d.save,
-    label:(i,c)=>i<0?"No saving":i===0?`Save under ${fmtB(c[0])}`:i===c.length?`Save ${fmtB(c[i-1])}+`:`Save ${fmtB(c[i-1])} – ${fmtB(c[i])}`},
-};
-const GROUPING={price_asc:["price",1],price_desc:["price",-1],pct:["pct",-1],save:["save",-1]};   // [range, direction]
-let groupBy=null;
-const groupOf=d=>{const r=RANGES[groupBy[0]];return rangeIndex(r.value(d),r.cuts)};
-const groupLabel=i=>{const r=RANGES[groupBy[0]];return r.label(i,r.cuts)};
-
-function updateThen(force){
-  const opts=THEN[S.sort]||[];
-  if(!opts.length){$("#thenWrap").hidden=true;$("#hint").textContent="";S.then="";return}
-  const vals=opts.map(o=>o[0]);
-  S.then=(!force&&vals.includes(S.then))?S.then:THEN_DEFAULT[S.sort];
-  $("#then").innerHTML=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-  $("#then").value=S.then;$("#thenWrap").hidden=false;$("#hint").textContent=HINT[S.sort]||"";
-}
-
 /* ---------------- state ---------------- */
-const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,images:false,sort:"pct",then:"",page:1,rows:48};
+const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,images:false,sort:"pct",page:1,rows:48};
 const S={...DEFAULTS,promos:new Set(),cats:new Set()};
 let view=[];
 
 /* ---------------- chips ---------------- */
-function tally(key){const m=new Map();D.forEach(d=>{const v=d[key];if(v)m.set(v,(m.get(v)||0)+1)});return [...m.entries()].sort((a,b)=>b[1]-a[1])}
+function tally(key){const m=new Map();D.forEach(d=>{const v=d[key];if(v)m.set(v,(m.get(v)||0)+1)});return [...m.entries()].sort((a,b)=>(b[0]===BF)-(a[0]===BF)||b[1]-a[1])}
 const CHIPS=[];
 function chipRow(host,items,set,withIcon){
-  const draw=()=>{host.innerHTML=items.map(([v,n])=>`<button class="chip" data-v="${esc(v)}" aria-pressed="${set.has(v)}">`+
-    (withIcon?`<i class="fa-solid ${icon(v)}"></i>`:"")+`${esc(v)}<span class="n">${n}</span></button>`).join("")};
+  const draw=()=>{host.innerHTML=items.map(([v,n])=>`<button class="chip${v===BF?" bf":""}" data-v="${esc(v)}" aria-pressed="${set.has(v)}">`+
+    (withIcon?`<i class="fa-solid ${icon(v)}"></i>`:v===BF?`<i class="fa-solid fa-bolt"></i>`:"")+`${esc(v)}<span class="n">${n}</span></button>`).join("")};
   host.onclick=e=>{const b=e.target.closest(".chip");if(!b)return;const v=b.dataset.v;set.has(v)?set.delete(v):set.add(v);S.page=1;draw();render()};
   CHIPS.push(draw);draw();
 }
-chipRow($("#promos"),tally("promo"),S.promos,false);
+chipRow($("#promos"),tally("pk"),S.promos,false);
 chipRow($("#cats"),tally("cat"),S.cats,true);
 
 /* ---------------- filter + sort ---------------- */
 function pass(d){
   if(d.st==="unknown"&&!S.unknown)return false;
-  if(d.st==="special"&&!S.special)return false;
+  if(d.st==="special"&&!S.special&&!(d.bf&&S.promos.has(BF)))return false;
   if(S.q&&!S.q.split(/\s+/).every(t=>d.hay.includes(t)))return false;
   if(S.pmin!=null&&(d.now==null||d.now<S.pmin))return false;
   if(S.pmax!=null&&(d.now==null||d.now>S.pmax))return false;
   if(S.dmin!=null||S.dmax!=null){if(d.pct==null)return false;if(S.dmin!=null&&d.pct<S.dmin)return false;if(S.dmax!=null&&d.pct>S.dmax)return false}
-  if(S.promos.size&&!S.promos.has(d.promo))return false;
+  if(S.promos.size&&!S.promos.has(d.pk))return false;
   if(S.cats.size&&!S.cats.has(d.cat))return false;
   return true;
 }
 function sortView(){
-  const primary=SORTS[S.sort]||SORTS.pct, secondary=SORTS[S.then]||null;
-  groupBy=(secondary&&GROUPING[S.sort])||null;
-  view.sort((a,b)=>{
-    if(groupBy){const x=groupOf(a),y=groupOf(b);if(x!==y)return (x-y)*groupBy[1];
-      return secondary.cmp(a,b)||primary.cmp(a,b)||a.name.localeCompare(b.name)}
-    return primary.cmp(a,b)||(secondary?secondary.cmp(a,b):0)||a.name.localeCompare(b.name);
-  });
+  const primary=SORTS[S.sort]||SORTS.pct;
+  view.sort((a,b)=>primary.cmp(a,b)||a.name.localeCompare(b.name));
 }
 
 /* ---------------- cards ---------------- */
@@ -795,7 +766,7 @@ function card(d){
   const price=d.disc!=null
     ?`<div><span class="now">${money(d.disc)}</span><span class="was">${money(d.orig)}</span></div>${d.save?`<span class="save">Save ${money(d.save)}</span>`:""}`
     :`<div><span class="now">${money(d.orig)}</span></div>`;
-  return `<article class="card" style="--heat:${hc}"><div class="cbody">
+  return `<article class="card${d.bf?" bf":""}" style="--heat:${hc}">${d.bf?`<div class="bfbanner"><i class="fa-solid fa-bolt"></i>Black Friday<i class="fa-solid fa-bolt"></i></div>`:""}<div class="cbody">
     <div class="ctop"><span class="cat" style="${pill(d.cat)}"><i class="fa-solid ${icon(d.cat)}"></i>${esc(d.cat)}</span>
       ${d.pct!=null?`<span class="pct">-${Math.round(d.pct)}%</span>`:""}</div>
     ${visual}
@@ -824,17 +795,14 @@ function render(){
   $$('[data-go="prev"]').forEach(x=>x.disabled=S.page<=1);$$('[data-go="next"]').forEach(x=>x.disabled=S.page>=pages);
   $("#empty").hidden=view.length>0;$("#pbarBottom").style.display=pages>1?"":"none";
 
-  const counts={};if(groupBy)view.forEach(d=>{const k=groupOf(d);counts[k]=(counts[k]||0)+1});
   /* In-feed ads only go between complete rows, so they never leave a half-empty row. */
   const cols=Math.max(1,getComputedStyle($("#grid")).gridTemplateColumns.split(" ").filter(Boolean).length);
-  let last=null,html="",rowPos=0,sinceAd=0,ads=0;
+  let html="",rowPos=0,sinceAd=0,ads=0;
   for(const d of view.slice(a,b)){
-    if(groupBy&&groupOf(d)!==last)rowPos=0;                 /* a range header starts a fresh row */
     if(ADS.feedSlot&&rowPos===0&&sinceAd>=ADS.every&&ads<ADS.maxPerPage){
       html+=`<div class="ad ad-feed"><span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block" data-ad-client="${ADS.client}" data-ad-slot="${ADS.feedSlot}" data-ad-format="auto" data-full-width-responsive="true"></ins></div>`;
       ads++;sinceAd=0}
     rowPos=(rowPos+1)%cols;sinceAd++;
-    if(groupBy){const k=groupOf(d);if(k!==last){html+=`<div class="band"><b>${groupLabel(k)}</b><span>${counts[k].toLocaleString()} deals</span></div>`;last=k}}
     html+=card(d);
   }
   const grid=$("#grid");grid.innerHTML=html;
@@ -865,8 +833,7 @@ $("#tSpecial").onchange=e=>{S.special=e.target.checked;S.page=1;render()};
 $("#tUnknown").onchange=e=>{S.unknown=e.target.checked;S.page=1;render()};
 $("#tImages").onchange=e=>{S.images=e.target.checked;render()};
 if(!HAS_IMAGES){$("#tImages").disabled=true;$("#imgToggle").classList.add("off");$("#imgToggle").title="No images in this scrape yet - run the updated scraper"}
-$("#sort").onchange=e=>{S.sort=e.target.value;updateThen(false);S.page=1;render()};
-$("#then").onchange=e=>{S.then=e.target.value;S.page=1;render()};
+$("#sort").onchange=e=>{S.sort=e.target.value;S.page=1;render()};
 $("#rows").onchange=e=>{S.rows=+e.target.value;S.page=1;render()};
 const toResults=()=>$("#pbarTop").scrollIntoView({behavior:"smooth",block:"start"});
 $$('[data-go]').forEach(b=>b.onclick=()=>{S.page+=b.dataset.go==="next"?1:-1;render();toResults()});
@@ -876,7 +843,7 @@ function resetAll(){
   Object.assign(S,{...DEFAULTS,images:S.images,rows:48});S.promos.clear();S.cats.clear();
   ["#q","#q2","#pmin","#pmax","#dmin","#dmax"].forEach(i=>$(i).value="");
   $("#tSpecial").checked=true;$("#tUnknown").checked=false;$("#sort").value="pct";$("#rows").value="48";
-  updateThen(true);CHIPS.forEach(f=>f());closeFilters();render();scrollTo({top:0,behavior:"smooth"});
+  CHIPS.forEach(f=>f());closeFilters();render();scrollTo({top:0,behavior:"smooth"});
 }
 $("#reset").onclick=resetAll;$("#brand").onclick=resetAll;
 
@@ -889,9 +856,9 @@ const setTheme=t=>{document.documentElement.dataset.theme=t;$("#theme").innerHTM
 $("#theme").onclick=()=>setTheme(isDark()?"light":"dark");
 
 $("#export").onclick=()=>{
-  const head=["Part Number","Name","Original Price","Discounted Price","% Off","Promo Code","Category","Status","URL"];
+  const head=["Part Number","Name","Original Price","Discounted Price","% Off","Promo Code","Category","Status","Black Friday","URL"];
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
-  const csv=[head.join(",")].concat(view.map(d=>[d.part,d.name,d.orig??"",d.disc??"",d.pct??"",d.promo,d.cat,d.st,pbUrl(d)].map(q).join(","))).join("\r\n");
+  const csv=[head.join(",")].concat(view.map(d=>[d.part,d.name,d.orig??"",d.disc??"",d.pct??"",d.promo,d.cat,d.st,d.bf?"Yes":"",pbUrl(d)].map(q).join(","))).join("\r\n");
   const u=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
   const a=document.createElement("a");a.href=u;a.download="pb-deals-view.csv";a.click();URL.revokeObjectURL(u);toast("Exported "+view.length+" rows");
 };
@@ -903,7 +870,6 @@ addEventListener("scroll",()=>$("#totop").classList.toggle("on",scrollY>700),{pa
 $("#totop").onclick=()=>scrollTo({top:0,behavior:"smooth"});
 
 if(ADS.topSlot){try{(window.adsbygoogle=window.adsbygoogle||[]).push({})}catch(e){}}
-updateThen(true);
 let saved=null;try{saved=localStorage.getItem("pbtheme")}catch(e){}
 if(saved)setTheme(saved);else render();
 </script>
@@ -1022,6 +988,9 @@ def main() -> None:
     imgs = sum(1 for r in rows if r[8])
     print(f"       {imgs:,} with product images" + ("" if imgs else
           " - run the updated pbscraper.py to collect them (the Images toggle stays off until then)"))
+    bfs = sum(1 for r in rows if r[9])
+    print(f"       {bfs:,} Black Friday deals" + ("" if bfs else
+          " - none flagged (re-run the updated pbscraper.py so cat.csv gets its Black Friday column)"))
     if unnamed:
         print(f"       {unnamed:,} rows had no part number (kept, not de-duplicated)")
     print("       top categories: " +
@@ -1046,4 +1015,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main()

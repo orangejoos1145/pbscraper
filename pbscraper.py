@@ -50,7 +50,15 @@ AJAX_HEADERS = {
 
 CSV_FIELDS = [
     "Part Number", "Name", "Original Price", "Discounted Price", "% Off", "Promo Code", "Image",
+    "Black Friday",
 ]
+
+# Promo icon filenames that mark a Black Friday deal. Matched against the
+# src / data-src of <img class="promotion-icon"> inside each product card.
+# If PB Tech uses another icon file for BF, just add a fragment here.
+BF_ICON_MARKERS = (
+    "20261110130548_icon-64x64",
+)
 
 PRICE_RE = re.compile(r"\d[\d,]*\.?\d*")
 PROMO_RE = re.compile(r"promo\s*code[:\s]*([A-Z0-9][A-Z0-9._-]+)", re.IGNORECASE)
@@ -135,6 +143,16 @@ def extract_image(card, part: str | None) -> str | None:
     return max(candidates, key=lambda c: c[0])[1]
 
 
+def is_black_friday(card) -> bool:
+    """True if the card carries the Black Friday promotion icon."""
+    for img in card.select("img.promotion-icon, img[class*='promotion-icon']"):
+        for attr in ("data-src", "src", "data-original"):
+            val = (img.get(attr) or "").lower()
+            if val and any(m in val for m in BF_ICON_MARKERS):
+                return True
+    return False
+
+
 def extract_prices(card) -> tuple[float | None, float | None]:
     promo = parse_price(clean_text(card.select_one(".item-price-label .ginc .fw-semibold")))
     full = parse_price(clean_text(card.select_one(".item-price-amount .ginc .full-price")))
@@ -178,6 +196,7 @@ def parse_page(html: str) -> list[dict[str, Any]]:
             "% Off": calc_percent_off(original, discounted),
             "Promo Code": extract_promo_code(card),
             "Image": extract_image(card, part),
+            "Black Friday": "1" if is_black_friday(card) else "",
         })
     return rows
 
@@ -302,13 +321,14 @@ def main() -> None:
     signatures: set[frozenset] = set()
     total = 0
     with_image = 0
+    bf_count = 0
 
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
 
         def flush(batch) -> int:
-            nonlocal total, with_image
+            nonlocal total, with_image, bf_count
             new = []
             for r in batch:
                 pn = r["Part Number"]
@@ -322,6 +342,7 @@ def main() -> None:
             fh.flush()
             total += len(new)
             with_image += sum(1 for r in new if r.get("Image"))
+            bf_count += sum(1 for r in new if r.get("Black Friday"))
             return len(new)
 
         for target_url in TARGET_URLS:
@@ -393,10 +414,11 @@ def main() -> None:
 
     print(f"\n[done] {total} unique products across all categories -> {args.out}")
     print(f"[done] product images found for {with_image} of {total} products")
+    print(f"[done] Black Friday deals flagged: {bf_count}")
     if total and with_image == 0:
         print("[warn] no product images found - send Claude the HTML of one product card "
               "(right-click a product > Inspect) so the image selector can be fixed", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    main()
+    main()
