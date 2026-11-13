@@ -609,7 +609,7 @@ select.field option{background:#13284A;color:#fff}
           <input class="field mono" id="dmax" placeholder="100" inputmode="numeric"></div>
         <label class="toggle"><input type="checkbox" id="tSpecial" checked><span>Specials</span></label>
         <label class="toggle"><input type="checkbox" id="tUnknown"><span>No discount</span></label>
-        <label class="toggle" id="imgToggle"><input type="checkbox" id="tImages"><span>Images</span></label>
+        <label class="toggle" id="imgToggle"><input type="checkbox" id="tImages" checked><span>Images</span></label>
         <button class="btn" id="reset"><i class="fa-solid fa-rotate-left"></i> Reset</button>
       </div>
 
@@ -720,7 +720,7 @@ const SORTS={
   name:      {label:"Name (A–Z)",          cmp:(a,b)=>a.name.localeCompare(b.name)},
 };
 /* ---------------- state ---------------- */
-const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,images:false,sort:"pct",page:1,rows:48};
+const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,images:true,sort:"pct",page:1,rows:48};
 const S={...DEFAULTS,promos:new Set(),cats:new Set()};
 let view=[];
 
@@ -738,7 +738,7 @@ chipRow($("#cats"),tally("cat"),S.cats,true);
 
 /* ---------------- filter + sort ---------------- */
 function pass(d){
-  if(d.st==="unknown"&&!S.unknown)return false;
+  if(d.st==="unknown"&&!S.unknown&&!d.bf)return false;   /* Black Friday deals have no "before" price, so always show them */
   if(d.st==="special"&&!S.special&&!(d.bf&&S.promos.has(BF)))return false;
   if(S.q&&!S.q.split(/\s+/).every(t=>d.hay.includes(t)))return false;
   if(S.pmin!=null&&(d.now==null||d.now<S.pmin))return false;
@@ -762,7 +762,7 @@ function card(d){
       `<img src="${esc(d.img)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"></a>`
     :`<div class="icon"><i class="fa-solid ${icon(d.cat)}"></i></div>`;
   const tag=d.promo?`<span class="tag" data-c="${esc(d.promo)}" title="Copy promo code" style="${ppill(d.promo)}"><i class="fa-solid fa-ticket"></i>${esc(d.promo)}</span>`
-    :d.st==="special"?`<span class="tag spec">SPECIAL</span>`:`<span class="tag plain">NO DISCOUNT</span>`;
+    :d.st==="special"?`<span class="tag spec">SPECIAL</span>`:d.bf?"":`<span class="tag plain">NO DISCOUNT</span>`;
   const price=d.disc!=null
     ?`<div><span class="now">${money(d.disc)}</span><span class="was">${money(d.orig)}</span></div>${d.save?`<span class="save">Save ${money(d.save)}</span>`:""}`
     :`<div><span class="now">${money(d.orig)}</span></div>`;
@@ -832,7 +832,7 @@ numf("#pmin","pmin");numf("#pmax","pmax");numf("#dmin","dmin");numf("#dmax","dma
 $("#tSpecial").onchange=e=>{S.special=e.target.checked;S.page=1;render()};
 $("#tUnknown").onchange=e=>{S.unknown=e.target.checked;S.page=1;render()};
 $("#tImages").onchange=e=>{S.images=e.target.checked;render()};
-if(!HAS_IMAGES){$("#tImages").disabled=true;$("#imgToggle").classList.add("off");$("#imgToggle").title="No images in this scrape yet - run the updated scraper"}
+if(!HAS_IMAGES){S.images=false;$("#tImages").checked=false;$("#tImages").disabled=true;$("#imgToggle").classList.add("off");$("#imgToggle").title="No images in this scrape yet - run the updated scraper"}
 $("#sort").onchange=e=>{S.sort=e.target.value;S.page=1;render()};
 $("#rows").onchange=e=>{S.rows=+e.target.value;S.page=1;render()};
 const toResults=()=>$("#pbarTop").scrollIntoView({behavior:"smooth",block:"start"});
