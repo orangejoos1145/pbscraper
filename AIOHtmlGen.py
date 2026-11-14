@@ -72,6 +72,15 @@ AFFILIATE_URL = ""
 # 4. Shown on privacy.html (AdSense requires a privacy policy).
 CONTACT_EMAIL = ""             # e.g. "you@example.com"
 
+# 5. "Buy me a coffee" button at the top + a one-time popup. Blank = both removed.
+BUYMEACOFFEE_URL = "https://buymeacoffee.com/polobaggyo"
+
+# SKU prefixes (first 3 letters of the part number) treated as "boring accessories":
+# MPP phone accessories, CAB cables, TAA tablet accessories, WTA watch accessories,
+# OFS office supplies. Hidden until the big slider on the page is switched on.
+# Add or remove prefixes freely (e.g. "ADP" for adapters).
+ACCESSORY_PREFIXES = ("MPP", "CAB", "TAA", "WTA", "OFS")
+
 
 # --------------------------------------------------------------------------- #
 # Categorisation - edit freely, first match wins
@@ -267,6 +276,7 @@ def load(csv_path: Path):
             {"promo": 0, "special": 1, "unknown": 2}[status],
             image,
             1 if bf else 0,                      # [9] Black Friday promo icon spotted by the scraper
+            1 if part.upper().startswith(ACCESSORY_PREFIXES) else 0,   # [10] boring accessory (hidden by default)
         ])
 
     return out, dupes, unnamed
@@ -487,6 +497,64 @@ select.field option{background:#13284A;color:#fff}
 .foot a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .mobile-search{display:none}
 
+/* ---------------- accessories slider ---------------- */
+.accbar{position:relative;margin:14px 0 0;padding:14px 20px;border-radius:20px;border:3px solid transparent;
+  background:linear-gradient(#0A1020,#0A1020) padding-box,linear-gradient(120deg,#00E5FF,#FF3DCB,#FFB400,#00E5FF) border-box;
+  background-size:auto,300% 100%;animation:accborder 6s linear infinite;
+  box-shadow:0 0 0 1px rgba(0,229,255,.25),0 10px 34px -10px rgba(255,61,203,.55),0 0 28px -6px rgba(0,229,255,.45)}
+@keyframes accborder{to{background-position:0 0,300% 0}}
+.accswitch{display:flex;align-items:center;gap:18px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
+.accswitch input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.acctrack{position:relative;flex:none;width:92px;height:46px;border-radius:999px;background:#3A4560;border:3px solid #9FB0CC;
+  transition:background .25s,border-color .25s,box-shadow .25s;animation:accpulse 2.2s ease-in-out infinite}
+@keyframes accpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,61,203,.65)}50%{box-shadow:0 0 0 10px rgba(255,61,203,0)}}
+.accknob{position:absolute;top:3px;left:3px;width:34px;height:34px;border-radius:50%;background:#FFFFFF;box-shadow:0 2px 8px rgba(0,0,0,.55);
+  transition:transform .25s cubic-bezier(.22,1,.36,1)}
+.accst{position:absolute;top:50%;transform:translateY(-50%);font:800 13px/1 "Space Grotesk",sans-serif;letter-spacing:.1em;transition:opacity .2s}
+.accst.off{right:12px;color:#E6EDF7}
+.accst.on{left:12px;color:#04130D;opacity:0}
+.accswitch input:checked+.acctrack{background:linear-gradient(90deg,#00F59B,#00C2FF);border-color:#CFFFF0;animation:none;box-shadow:0 0 22px rgba(0,245,155,.7)}
+.accswitch input:checked+.acctrack .accknob{transform:translateX(46px)}
+.accswitch input:checked+.acctrack .accst.on{opacity:1}
+.accswitch input:checked+.acctrack .accst.off{opacity:0}
+.accswitch input:focus-visible+.acctrack{outline:3px solid #FFFFFF;outline-offset:4px}
+.acctext{display:flex;flex-direction:column;gap:3px;min-width:0}
+.acctext b{font-family:"Space Grotesk",sans-serif;font-size:19px;font-weight:700;line-height:1.25;color:#FFFFFF}
+.acctext small{font-size:13.5px;line-height:1.35;color:#C3D2E6}
+.acctext small strong{color:#FFD76A}
+/* ---------------- buy me a coffee ---------------- */
+.bmc{display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:11px 20px;border-radius:14px;background:#FFDD00;color:#000000;
+  font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:15.5px;letter-spacing:.01em;text-decoration:none;white-space:nowrap;
+  border:2px solid #000;box-shadow:0 0 0 3px rgba(255,221,0,.35),0 8px 24px -6px rgba(255,221,0,.7);transition:transform .15s,box-shadow .15s,background .15s}
+.bmc i{font-size:18px;color:#000;animation:bmcwig 3.5s ease-in-out infinite;transform-origin:50% 90%}
+.bmc:hover{background:#FFE94D;transform:translateY(-2px) scale(1.03);box-shadow:0 0 0 4px rgba(255,221,0,.5),0 12px 30px -6px rgba(255,221,0,.9)}
+@keyframes bmcwig{0%,70%,100%{transform:rotate(0)}76%{transform:rotate(-14deg)}84%{transform:rotate(12deg)}92%{transform:rotate(-6deg)}}
+.bmcmodal{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(3,6,12,.74);backdrop-filter:blur(4px)}
+.bmcmodal[hidden]{display:none}
+.bmcbox{position:relative;width:100%;max-width:420px;max-height:92vh;overflow-y:auto;background:var(--surface);color:var(--ink);border:1px solid var(--line);
+  border-radius:22px;padding:30px 26px 22px;text-align:center;box-shadow:0 30px 80px -20px rgba(0,0,0,.8);animation:bmcpop .35s cubic-bezier(.22,1,.36,1)}
+.bmcbox::before{content:"";position:absolute;left:0;right:0;top:0;height:7px;background:#FFDD00;border-radius:22px 22px 0 0}
+@keyframes bmcpop{from{opacity:0;transform:translateY(18px) scale(.95)}to{opacity:1;transform:none}}
+.bmcx{position:absolute;top:14px;right:12px;width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--surface2);color:var(--ink);font-size:16px}
+.bmcx:hover{background:var(--sunk)}
+.bmccup{width:72px;height:72px;margin:6px auto 14px;border-radius:50%;display:grid;place-items:center;background:#FFDD00;color:#000;font-size:32px;border:3px solid #000}
+.bmcbox h2{margin:0 0 8px;font-family:"Space Grotesk",sans-serif;font-size:24px;line-height:1.2;color:var(--ink)}
+.bmcbox p{margin:0 0 18px;font-size:14.5px;line-height:1.55;color:var(--muted)}
+.bmcgo{display:flex;align-items:center;justify-content:center;gap:9px;padding:13px 18px;border-radius:14px;background:#FFDD00;color:#000;border:2px solid #000;
+  font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:16.5px;text-decoration:none;box-shadow:0 8px 24px -8px rgba(255,221,0,.8)}
+.bmcgo:hover{background:#FFE94D}
+.bmclater{display:block;margin:12px auto 0;background:none;border:0;color:var(--muted);font-size:13.5px;text-decoration:underline;text-underline-offset:3px;padding:8px 12px}
+.bmclater:hover{color:var(--ink)}
+@media (max-width:900px){
+  .accbar{padding:12px 14px;border-radius:16px}
+  .accswitch{gap:14px}
+  .acctrack{width:80px;height:42px}
+  .accknob{width:30px;height:30px}
+  .accswitch input:checked+.acctrack .accknob{transform:translateX(38px)}
+  .acctext b{font-size:16px}
+  .acctext small{font-size:12.5px}
+  .bmc{order:2;flex:1 1 100%;font-size:15px;padding:11px 14px}
+}
 /* ---------------- BLACK FRIDAY ---------------- */
 .chip.bf{position:relative;overflow:hidden;background:linear-gradient(135deg,#0B0B0B,#2A1D04);border-color:#F5C84B;color:#FFE08A;
   font-weight:800;letter-spacing:.07em;text-transform:uppercase;
@@ -577,6 +645,7 @@ select.field option{background:#13284A;color:#fff}
           <div class="stamp mono"><i class="fa-solid fa-circle"></i> Scraped __GENERATED__ &middot; incl. GST</div>
         </div>
       </button>
+      __BMC_BTN__
       <div class="hbtns">
         <button class="btn" id="filtersBtn"><i class="fa-solid fa-sliders"></i> Filters <span class="badge" id="fcount"></span></button>
         <button class="btn" id="export" title="Download what's showing as CSV"><i class="fa-solid fa-file-arrow-down"></i><span class="label">Export</span></button>
@@ -631,6 +700,14 @@ select.field option{background:#13284A;color:#fff}
     </div>
   </header>
 
+  <section class="accbar" id="accBar">
+    <label class="accswitch">
+      <input type="checkbox" id="tAcc">
+      <span class="acctrack"><span class="accst on">ON</span><span class="accst off">OFF</span><i class="accknob"></i></span>
+      <span class="acctext"><b>Show phone cases, cables, straps &amp; other accessories</b><small id="accCount"></small></span>
+    </label>
+  </section>
+
   __AD_TOP__
   <div class="pbar" id="pbarTop">
     <div class="title"><h2 id="heading">All deals</h2><span class="range" id="range"></span></div>
@@ -647,7 +724,7 @@ select.field option{background:#13284A;color:#fff}
 
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" hidden><i class="fa-solid fa-magnifying-glass"></i>
-    <b>Nothing matches these filters</b>Widen the price or discount range, or switch on "No discount" items.</div>
+    <b>Nothing matches these filters</b>Widen the price or discount range, or switch on "No discount" items. Phone cases, cables and other accessories stay hidden unless the big slider above is switched on.</div>
 
   <div class="pbar bottom" id="pbarBottom">
     <div class="pg">
@@ -657,6 +734,7 @@ select.field option{background:#13284A;color:#fff}
     </div>
   </div>
 </div>
+__BMC_MODAL__
 <footer class="foot">Prices and stock from pbtech.co.nz at the time of scraping and may have changed. Not affiliated with PB Tech.__FOOT_LINKS__</footer>
 <div class="overlay" id="overlay"></div>
 <button class="totop" id="totop" aria-label="Back to top"><i class="fa-solid fa-arrow-up"></i></button>
@@ -669,7 +747,7 @@ const STATUS=["promo","special","unknown"];
 const BF="BLACK FRIDAY";
 const D=RAW.map(r=>{
   const now=r[3]!=null?r[3]:r[2];
-  return {part:r[0],name:r[1],orig:r[2],disc:r[3],pct:r[4],promo:r[5],cat:r[6],st:STATUS[r[7]],img:r[8]||"",bf:!!r[9],pk:r[9]?BF:(r[5]||""),
+  return {part:r[0],name:r[1],orig:r[2],disc:r[3],pct:r[4],promo:r[5],cat:r[6],st:STATUS[r[7]],img:r[8]||"",bf:!!r[9],acc:!!r[10],pk:r[9]?BF:(r[5]||""),
     now, save:(r[3]!=null&&r[2]!=null)?Math.round((r[2]-r[3])*100)/100:null,
     hay:(r[0]+" "+r[1]+" "+r[5]+(r[9]?" "+BF:"")).toLowerCase()};
 });
@@ -720,7 +798,7 @@ const SORTS={
   name:      {label:"Name (A–Z)",          cmp:(a,b)=>a.name.localeCompare(b.name)},
 };
 /* ---------------- state ---------------- */
-const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,images:true,sort:"pct",page:1,rows:48};
+const DEFAULTS={q:"",pmin:null,pmax:null,dmin:null,dmax:null,special:true,unknown:false,acc:false,images:true,sort:"pct",page:1,rows:48};
 const S={...DEFAULTS,promos:new Set(),cats:new Set()};
 let view=[];
 
@@ -738,6 +816,7 @@ chipRow($("#cats"),tally("cat"),S.cats,true);
 
 /* ---------------- filter + sort ---------------- */
 function pass(d){
+  if(d.acc&&!S.acc)return false;   /* boring accessories stay hidden until the slider is on */
   if(d.st==="unknown"&&!S.unknown&&!d.bf)return false;   /* Black Friday deals have no "before" price, so always show them */
   if(d.st==="special"&&!S.special&&!(d.bf&&S.promos.has(BF)))return false;
   if(S.q&&!S.q.split(/\s+/).every(t=>d.hay.includes(t)))return false;
@@ -814,7 +893,7 @@ function render(){
     img.onerror=()=>{ph.classList.add("done");img.remove()};   /* keep the category icon */
   });
 
-  const active=(S.q?1:0)+(S.pmin!=null||S.pmax!=null?1:0)+(S.dmin!=null||S.dmax!=null?1:0)+S.promos.size+S.cats.size+(S.unknown?1:0)+(S.special?0:1);
+  const active=(S.q?1:0)+(S.pmin!=null||S.pmax!=null?1:0)+(S.dmin!=null||S.dmax!=null?1:0)+S.promos.size+S.cats.size+(S.unknown?1:0)+(S.special?0:1)+(S.acc?1:0);
   $("#fcount").textContent=active||"";
 }
 
@@ -832,6 +911,11 @@ numf("#pmin","pmin");numf("#pmax","pmax");numf("#dmin","dmin");numf("#dmax","dma
 $("#tSpecial").onchange=e=>{S.special=e.target.checked;S.page=1;render()};
 $("#tUnknown").onchange=e=>{S.unknown=e.target.checked;S.page=1;render()};
 $("#tImages").onchange=e=>{S.images=e.target.checked;render()};
+const ACC_N=D.filter(d=>d.acc).length;
+function updAcc(){$("#accCount").innerHTML=S.acc?`Showing all <strong>${ACC_N.toLocaleString()}</strong> accessory items &mdash; flip the switch to hide them again.`
+  :`<strong>${ACC_N.toLocaleString()}</strong> accessory items are hidden. Flip the switch to show them.`}
+$("#tAcc").onchange=e=>{S.acc=e.target.checked;S.page=1;updAcc();render()};
+updAcc();
 if(!HAS_IMAGES){S.images=false;$("#tImages").checked=false;$("#tImages").disabled=true;$("#imgToggle").classList.add("off");$("#imgToggle").title="No images in this scrape yet - run the updated scraper"}
 $("#sort").onchange=e=>{S.sort=e.target.value;S.page=1;render()};
 $("#rows").onchange=e=>{S.rows=+e.target.value;S.page=1;render()};
@@ -842,7 +926,7 @@ $$(".pageno").forEach(i=>i.onchange=()=>{const v=parseInt(i.value);if(v>0){S.pag
 function resetAll(){
   Object.assign(S,{...DEFAULTS,images:S.images,rows:48});S.promos.clear();S.cats.clear();
   ["#q","#q2","#pmin","#pmax","#dmin","#dmax"].forEach(i=>$(i).value="");
-  $("#tSpecial").checked=true;$("#tUnknown").checked=false;$("#sort").value="pct";$("#rows").value="48";
+  $("#tSpecial").checked=true;$("#tUnknown").checked=false;$("#tAcc").checked=false;updAcc();$("#sort").value="pct";$("#rows").value="48";
   CHIPS.forEach(f=>f());closeFilters();render();scrollTo({top:0,behavior:"smooth"});
 }
 $("#reset").onclick=resetAll;$("#brand").onclick=resetAll;
@@ -868,6 +952,26 @@ addEventListener("keydown",e=>{
 });
 addEventListener("scroll",()=>$("#totop").classList.toggle("on",scrollY>700),{passive:true});
 $("#totop").onclick=()=>scrollTo({top:0,behavior:"smooth"});
+
+
+/* ---------------- buy me a coffee popup (once, until cookies are cleared) ---------------- */
+(function(){
+  const box=$("#bmcModal");if(!box)return;
+  const KEY="pbbmc";
+  const cookiesOk=()=>{try{document.cookie="pbt=1; path=/; SameSite=Lax; max-age=60";const ok=document.cookie.indexOf("pbt=1")>-1;document.cookie="pbt=; path=/; max-age=0";return ok}catch(e){return false}};
+  const seen=()=>{try{if(document.cookie.split("; ").some(c=>c.indexOf(KEY+"=")===0))return true}catch(e){}
+    try{return !cookiesOk()&&localStorage.getItem(KEY)==="1"}catch(e){return false}};
+  const remember=()=>{try{document.cookie=KEY+"=1; path=/; SameSite=Lax; max-age="+60*60*24*365*5}catch(e){}
+    try{localStorage.setItem(KEY,"1")}catch(e){}};
+  let prevFocus=null;
+  const close=()=>{if(box.hidden)return;box.hidden=true;remember();document.body.style.overflow="";if(prevFocus&&prevFocus.focus)prevFocus.focus()};
+  const open=()=>{prevFocus=document.activeElement;box.hidden=false;document.body.style.overflow="hidden";const g=$("#bmcGo");if(g)g.focus()};
+  $("#bmcX").onclick=close;$("#bmcLater").onclick=close;
+  $("#bmcGo").addEventListener("click",()=>setTimeout(close,50));
+  box.addEventListener("click",e=>{if(e.target===box)close()});
+  addEventListener("keydown",e=>{if(e.key==="Escape"&&!box.hidden)close()});
+  if(!seen())setTimeout(open,1800);
+})();
 
 if(ADS.topSlot){try{(window.adsbygoogle=window.adsbygoogle||[]).push({})}catch(e){}}
 let saved=null;try{saved=localStorage.getItem("pbtheme")}catch(e){}
@@ -907,7 +1011,26 @@ def build(rows, generated: str, ads: dict) -> str:
         top = (f'<div class="ad ad-top"><span class="ad-label">Advertisement</span>'
                f'<ins class="adsbygoogle" style="display:block" data-ad-client="{ads["client"]}" data-ad-slot="{ads["topSlot"]}" '
                f'data-ad-format="auto" data-full-width-responsive="true"></ins></div>')
+    bmc_btn = bmc_modal = ""
+    url = BUYMEACOFFEE_URL.strip()
+    if url.startswith("https://"):
+        bmc_btn = (f'<a class="bmc" id="bmcTop" href="{url}" target="_blank" rel="noopener">'
+                   f'<i class="fa-solid fa-mug-hot"></i>Buy me a coffee</a>')
+        bmc_modal = (
+            '<div class="bmcmodal" id="bmcModal" hidden role="dialog" aria-modal="true" aria-labelledby="bmcTitle">'
+            '<div class="bmcbox">'
+            '<button class="bmcx" id="bmcX" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>'
+            '<div class="bmccup"><i class="fa-solid fa-mug-hot"></i></div>'
+            '<h2 id="bmcTitle">Enjoying PB Deals?</h2>'
+            '<p>This site is free and kept up to date by one person. If it saved you some money, '
+            'you can buy me a coffee. It is completely optional and helps keep the deals coming.</p>'
+            f'<a class="bmcgo" id="bmcGo" href="{url}" target="_blank" rel="noopener">'
+            '<i class="fa-solid fa-mug-hot"></i>Buy me a coffee</a>'
+            '<button class="bmclater" id="bmcLater">Maybe later</button>'
+            '</div></div>')
     return (TEMPLATE
+            .replace("__BMC_BTN__", bmc_btn)
+            .replace("__BMC_MODAL__", bmc_modal)
             .replace("__ADS_HEAD__", head)
             .replace("__AD_TOP__", top)
             .replace("__FOOT_LINKS__", links)
@@ -934,7 +1057,7 @@ p,li{color:#C3D0E0}a{color:#FFB45C}small{color:#7F93AD}
 <h2>What this site is</h2>
 <p>PB Deals lists discounted products scraped from pbtech.co.nz. It is not affiliated with PB Tech. Prices may have changed since the last update.</p>
 <h2>Information we collect</h2>
-<p>This site has no accounts and no forms, and doesn't collect your name, email or other personal details. Your light/dark theme choice is saved in your own browser (local storage) and never leaves your device.</p>
+<p>This site has no accounts and no forms, and doesn't collect your name, email or other personal details. Your light/dark theme choice is saved in your own browser (local storage) and never leaves your device. If you dismiss the "buy me a coffee" popup, a small cookie (or local-storage flag) remembers that so it isn't shown again; it holds no personal information.</p>
 <h2>Advertising and cookies</h2>
 <p>This site shows ads from Google AdSense. Google and its partners use cookies to serve ads based on your visits to this and other websites.
 You can learn how Google uses this information at <a href="https://policies.google.com/technologies/partner-sites">policies.google.com/technologies/partner-sites</a>,
@@ -988,6 +1111,8 @@ def main() -> None:
     imgs = sum(1 for r in rows if r[8])
     print(f"       {imgs:,} with product images" + ("" if imgs else
           " - run the updated pbscraper.py to collect them (the Images toggle stays off until then)"))
+    accs = sum(1 for r in rows if r[10])
+    print(f"       {accs:,} accessories (hidden on the page until the slider is switched on)")
     bfs = sum(1 for r in rows if r[9])
     print(f"       {bfs:,} Black Friday deals" + ("" if bfs else
           " - none flagged (re-run the updated pbscraper.py so cat.csv gets its Black Friday column)"))
